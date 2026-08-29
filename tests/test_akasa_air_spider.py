@@ -14,6 +14,7 @@ from datetime import date
 
 from app.ingestion.scheduler import SearchTask
 from apixproj.spiders.akasa_air_spider import (
+    INTER_TASK_JITTER_S,
     AkasaAirSpider,
     build_search_request_body,
     parse_fare_search_response,
@@ -170,6 +171,18 @@ class ParseFareSearchResponseTests(unittest.TestCase):
         self.assertEqual(len(items), 2)
         self.assertEqual({i["flight_number"] for i in items}, {"QP1119", "QP1112"})
 
+    def test_alternate_airport_designator_is_filtered_out(self):
+        """searchOriginMacs/searchDestinationMacs can return a nearby
+        alternate-airport itinerary (observed live: DXN-BOM under a
+        DEL-BOM search) -- that's off-basket data for the fixed city-pair
+        index and must be dropped, not returned mislabeled as the
+        searched route."""
+        payload = make_real_shaped_payload()
+        journey = payload["data"]["results"][0]["trips"][0]["journeysAvailableByMarket"][0]["value"][0]
+        journey["designator"]["origin"] = "DXN"  # searched task is DEL-BOM
+        items = parse_fare_search_response(payload, make_task())
+        self.assertEqual(items, [])
+
     def test_journey_with_no_segments_is_skipped(self):
         payload = make_real_shaped_payload()
         payload["data"]["results"][0]["trips"][0]["journeysAvailableByMarket"][0]["value"][0]["segments"] = []
@@ -197,6 +210,11 @@ class AkasaAirSpiderTests(unittest.TestCase):
         tasks = [make_task()]
         spider = AkasaAirSpider(tasks=tasks)
         self.assertEqual(spider.tasks, tasks)
+
+    def test_inter_task_jitter_is_a_sane_positive_range(self):
+        low, high = INTER_TASK_JITTER_S
+        self.assertGreaterEqual(low, 0)
+        self.assertLess(low, high)
 
 
 class _FakeDecision:
@@ -263,6 +281,21 @@ class AkasaAirSpiderRunTaskTests(unittest.IsolatedAsyncioTestCase):
         items = [item async for item in spider._run_task(fake_context, "fake-token", spider.tasks[0])]
         self.assertEqual(items, [])
         self.assertIn("request_failed:RuntimeError", spider.missing_data.summary())
+
+    async def test_run_task_flags_missing_data_on_malformed_payload_without_raising(self):
+        """A response that parses as JSON but has an unexpected shape deep
+        inside (faresAvailable entries whose 'value' isn't a dict) must be
+        caught and flagged, not propagate out of _run_task and abort a
+        whole multi-task batch run — this is exactly the robustness
+        run_daily_scrape.py's full-basket run depends on."""
+        payload = make_real_shaped_payload()
+        payload["data"]["faresAvailable"][0]["value"] = "not-a-dict"  # triggers .get() on a str
+        spider = AkasaAirSpider(tasks=[make_task()])
+        fake_context = _FakeBrowserContext(_FakeResponse(200, payload))
+
+        items = [item async for item in spider._run_task(fake_context, "fake-token", spider.tasks[0])]
+        self.assertEqual(items, [])
+        self.assertIn("parse_failed:AttributeError", spider.missing_data.summary())
 
     async def test_run_task_flags_missing_data_on_zero_items(self):
         spider = AkasaAirSpider(tasks=[make_task()])

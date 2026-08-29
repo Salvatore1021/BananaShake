@@ -62,8 +62,10 @@ traffic data for the target city-pairs is dominated by non-stop service).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 from typing import AsyncIterator, Iterable
 
 from playwright.async_api import Browser, async_playwright
@@ -93,6 +95,13 @@ TOKEN_CARRYING_REQUEST_SUBSTRING = "/api/ibe/resources/master-data"
 
 NAVIGATION_TIMEOUT_MS = 30_000
 TOKEN_WAIT_TIMEOUT_MS = 15_000
+# Small random jitter added on top of the compliance gateway's own
+# crawl_delay() between successive fare-search calls in a multi-task run
+# (see RouteDateMatrixScheduler-driven batches) -- akasa_air has no
+# Crawl-delay in robots.txt, so the gateway falls back to
+# FALLBACK_POLITENESS_DELAY_S; jitter just avoids a metronome-regular
+# request cadence on top of that floor, never below it.
+INTER_TASK_JITTER_S = (0.5, 1.5)
 
 
 def build_search_request_body(task: SearchTask) -> dict:
@@ -162,6 +171,17 @@ def _parse_journey(journey: dict, fares_by_key: dict, task: SearchTask) -> list[
     if not segments:
         return []
     designator = journey.get("designator") or {}
+    # Requesting searchOriginMacs/searchDestinationMacs (see
+    # build_search_request_body) makes Akasa's API also return itineraries
+    # via nearby alternate airports in the same metro area (observed live:
+    # a DEL-BOM search returning some DXN-BOM / DEL-NMI journeys). The
+    # index basket in app/ingestion/scheduler.py is a fixed set of exact
+    # city pairs, so an alternate-airport substitution is off-basket data,
+    # not a cleaner/better version of the searched route — drop it here
+    # rather than let it dilute a route's index series with a different
+    # route's fares.
+    if designator.get("origin") != task.origin or designator.get("destination") != task.destination:
+        return []
     first_segment_identifier = (segments[0] or {}).get("identifier") or {}
     carrier_code = first_segment_identifier.get("carrierCode") or CARRIER_CODE
     flight_number = f"{carrier_code}{first_segment_identifier.get('identifier', '')}"
@@ -249,8 +269,14 @@ class AkasaAirSpider:
             )
             context = None
             auth_header = None
+            crawl_delay_s = self.gateway.crawl_delay(self.source_name)
             try:
-                for task in self.tasks:
+                for i, task in enumerate(self.tasks):
+                    if i > 0:
+                        # Politeness pacing between successive fare-search calls
+                        # in a multi-task batch — see INTER_TASK_JITTER_S.
+                        await asyncio.sleep(crawl_delay_s + random.uniform(*INTER_TASK_JITTER_S))
+
                     decision = self.gateway.check(self.source_name, HOME_URL)
                     if not decision.allowed:
                         logger.warning("akasa_air: task %s BLOCKED at dispatch: %s", task.task_id, decision.reason)
@@ -340,7 +366,16 @@ class AkasaAirSpider:
             )
             return
 
-        items = parse_fare_search_response(payload, task)
+        try:
+            items = parse_fare_search_response(payload, task)
+        except Exception as exc:  # noqa: BLE001 — a malformed/unexpected payload for one task must never crash the batch
+            logger.error("akasa_air: task %s — payload parsing failed: %s", task.task_id, exc)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason=f"parse_failed:{type(exc).__name__}",
+            )
+            return
+
         if not items:
             logger.warning(
                 "akasa_air: task %s — fare-search API responded but zero items were extracted "
