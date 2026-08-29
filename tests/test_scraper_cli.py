@@ -28,14 +28,45 @@ from test_scraper import (
 
 def make_item(**overrides) -> dict:
     defaults = dict(
-        flight_number="AI101", airline_name="Air India", carrier_code="AI",
-        origin="DEL", destination="BOM", departure_time="06:05", arrival_time="08:20",
-        base_fare=4400.0, taxes_and_fees=1420.0, total_fare=5820.0, seats_left=4,
-        scraped_at_timestamp="2026-08-29T00:00:00+00:00", lead_window="T+7",
-        source_name="yatra", source_type="ota", route_id="DEL-BOM",
+        flight_number="QP1119", airline_name="Akasa Air", carrier_code="QP",
+        origin="DEL", destination="BOM", departure_time="2026-09-06T08:40:00",
+        arrival_time="2026-09-06T11:05:00", base_fare=5640.0, taxes_and_fees=1240.0,
+        total_fare=6880.0, seats_left=7, scraped_at_timestamp="2026-08-29T00:00:00+00:00",
+        lead_window="T+7", source_name="akasa_air", source_type="airline_direct", route_id="DEL-BOM",
     )
     defaults.update(overrides)
     return defaults
+
+
+def make_akasa_payload(n_flights: int) -> dict:
+    """Payload shaped exactly like a real Akasa fare-search response — see
+    apixproj/spiders/akasa_air_spider.py's module docstring for how this
+    shape was confirmed."""
+    journeys = []
+    fares_available = []
+    for i in range(n_flights):
+        fare_key = f"fk{i}"
+        journeys.append({
+            "designator": {
+                "origin": "DEL", "destination": "BOM",
+                "departure": f"2026-09-06T{8 + i:02d}:00:00", "arrival": f"2026-09-06T{10 + i:02d}:20:00",
+            },
+            "flightType": "NonStop",
+            "journeyKey": f"jk{i}",
+            "fares": [{"fareAvailabilityKey": fare_key, "details": [{"availableCount": 7}]}],
+            "segments": [{"designator": {}, "identifier": {"identifier": str(1100 + i), "carrierCode": "QP"}}],
+        })
+        fares_available.append({
+            "key": fare_key,
+            "value": {"fares": [{"passengerFares": [{"fareAmount": 6880.0 + i, "discountedFare": 5640.0 + i}]}]},
+        })
+
+    return {
+        "data": {
+            "results": [{"trips": [{"journeysAvailableByMarket": [{"key": "DEL|BOM", "value": journeys}]}]}],
+            "faresAvailable": fares_available,
+        }
+    }
 
 
 class BuildTaskTests(unittest.TestCase):
@@ -124,74 +155,35 @@ class RunAssertionsTests(unittest.TestCase):
 
 
 class LoadReplayPayloadTests(unittest.TestCase):
-    def test_ota_replay_uses_yatra_parser(self):
-        payload = {
-            "data": {
-                "fltSchedule": {"r1": [{"ID": "r1", "OD": [{"tdu": "06:00", "FS": [
-                    {"fid": "f1", "fnum": "AI101", "ac": "AI", "acn": "Air India", "dd": "06:05", "ad": "08:20", "seatsLeft": 4},
-                ]}]}]},
-                "fareDetails": {"r1": {"f1": {"O": {"ADT": {"bf": 4400, "tf": 1420, "ftf": 5820}}}}},
-                "airlineNames": {"AI": "Air India"},
-            }
-        }
+    def test_parses_a_real_shaped_akasa_payload(self):
+        payload = make_akasa_payload(2)
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             json.dump(payload, f)
             path = f.name
         try:
             task = build_task("DEL", "BOM", 7)
-            items = load_replay_payload(path, task, "ota")
-            self.assertEqual(len(items), 1)
-            self.assertEqual(items[0]["flight_number"], "AI101")
-            self.assertEqual(items[0]["source_name"], "yatra")
-        finally:
-            os.unlink(path)
-
-    def test_airline_replay_uses_air_india_parser(self):
-        payload = {"results": [{"flightNumber": "AI101", "totalFare": 5820.0, "baseFare": 4400.0, "taxesAndFees": 1420.0}]}
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
-            json.dump(payload, f)
-            path = f.name
-        try:
-            task = build_task("DEL", "BOM", 1)
-            items = load_replay_payload(path, task, "airline")
-            self.assertEqual(len(items), 1)
-            self.assertEqual(items[0]["flight_number"], "AI101")
-            self.assertEqual(items[0]["source_name"], "air_india")
+            items = load_replay_payload(path, task)
+            self.assertEqual(len(items), 2)
+            self.assertEqual(items[0]["source_name"], "akasa_air")
+            self.assertEqual(items[0]["carrier_code"], "QP")
         finally:
             os.unlink(path)
 
 
 class MainReplayIntegrationTests(unittest.TestCase):
-    def _write_yatra_payload(self, n_flights: int) -> str:
-        schedule, fares, names = {}, {}, {}
-        for i in range(n_flights):
-            route_key = f"r{i}"
-            flight_id = f"f{i}"
-            schedule[route_key] = [{
-                "ID": route_key,
-                "OD": [{"tdu": "06:00", "FS": [{
-                    "fid": flight_id, "fnum": f"AI{100 + i}", "ac": "AI", "acn": "Air India",
-                    "dd": "06:05", "ad": "08:20", "seatsLeft": 4,
-                }]}],
-            }]
-            fares[route_key] = {flight_id: {"O": {"ADT": {"bf": 4000 + i, "tf": 1000, "ftf": 5000 + i}}}}
-            names["AI"] = "Air India"
-        payload = {"data": {"fltSchedule": schedule, "fareDetails": fares, "airlineNames": names}}
-
-        fd, path = tempfile.mkstemp(suffix=".json")
+    def test_main_returns_0_and_writes_output_when_verification_passes(self):
+        payload = make_akasa_payload(MIN_VALID_QUOTES)
+        fd, payload_path = tempfile.mkstemp(suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f)
-        return path
 
-    def test_main_returns_0_and_writes_output_when_verification_passes(self):
-        payload_path = self._write_yatra_payload(MIN_VALID_QUOTES)
         original_cwd = os.getcwd()
         tmp_dir = tempfile.mkdtemp()
         try:
             os.chdir(tmp_dir)
             exit_code = main([
                 "--origin", "DEL", "--destination", "BOM", "--days", "7",
-                "--source", "ota", "--replay", payload_path,
+                "--source", "akasa", "--replay", payload_path,
             ])
             self.assertEqual(exit_code, 0)
             self.assertTrue(os.path.exists("sample_flights.json"))
@@ -203,14 +195,18 @@ class MainReplayIntegrationTests(unittest.TestCase):
             os.unlink(payload_path)
 
     def test_main_returns_1_when_verification_fails(self):
-        payload_path = self._write_yatra_payload(MIN_VALID_QUOTES - 1)
+        payload = make_akasa_payload(MIN_VALID_QUOTES - 1)
+        fd, payload_path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
         original_cwd = os.getcwd()
         tmp_dir = tempfile.mkdtemp()
         try:
             os.chdir(tmp_dir)
             exit_code = main([
                 "--origin", "DEL", "--destination", "BOM", "--days", "7",
-                "--source", "ota", "--replay", payload_path,
+                "--source", "akasa", "--replay", payload_path,
             ])
             self.assertEqual(exit_code, 1)
         finally:

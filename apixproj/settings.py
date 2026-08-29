@@ -65,12 +65,6 @@ DOWNLOADER_MIDDLEWARES = {
     "middlewares.ExponentialBackoffMiddleware": 550,
 }
 
-APIX_DATABASE_URL = "sqlite:///apix_demo.db"
-ITEM_PIPELINES = {
-    "pipelines.JsonExportPipeline": 300,
-    "pipelines.RawFareQuotePipeline": 310,
-}
-OTA_TARGET_URL = "https://flight.yatra.com/air-service/dom2/price?searchId=614b8271-37a1-4edc-9102-38fb5ee2429a&msid=614b8271-37a1-4edc-9102-38fb5ee2429a&mode=Background&bpc=true&isSR=false&unique=1787948125668&variation=0&specialFareFlag=undefined&flightIdCSV=DELBOMIX1605EP20260830_AIRASIAAPI&flightPrice=6900&sc=AIRASIAAPI&dfc=false"
 FEEDS = {
     "ota_flights.json": {"format": "json", "overwrite": True},
 }

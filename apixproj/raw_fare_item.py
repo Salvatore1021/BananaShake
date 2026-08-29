@@ -2,17 +2,19 @@
 APIx — Canonical Raw Fare Item Shape
 =======================================
 
-Every scraper worker in this project — OTA (apixproj/spiders/ota_yatra_spider.py)
-and airline-direct (apixproj/spiders/air_india_stealth_spider.py) alike —
-yields items in this exact flat shape, regardless of how different the
-underlying source's JSON payload looks. Keeping the shape defined in one
-place means the two spiders can't quietly drift apart on field names, and
-any downstream consumer only has to know one schema.
+Every scraper worker in this project (currently
+apixproj/spiders/akasa_air_spider.py) yields items in this exact flat
+shape, regardless of how different the underlying source's JSON payload
+looks. Keeping the shape defined in one place means a future second
+source can't quietly drift apart on field names, and any downstream
+consumer (run_daily_scrape.py's JSON/CSV export, a future database loader)
+only has to know one schema.
 
-This is deliberately a different (flatter, source-agnostic) shape from
-app/models/schema.py's RawFareQuote — that one is the persisted-to-database
-shape a loader maps onto after resolving carrier/route foreign keys; this
-one is what a spider itself can produce with no database access at all.
+Deliberately source-agnostic and flat — no foreign keys, no persistence
+concerns — because this is what a spider itself can produce with no
+database access at all. A future Postgres loader maps this shape onto
+whatever normalized schema the database uses, resolving carrier/route
+dimension tables at load time rather than scrape time.
 """
 
 from __future__ import annotations

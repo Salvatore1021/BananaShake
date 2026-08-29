@@ -247,8 +247,8 @@ class MissingDataTracker:
     can be shared by both the downloader middlewares below AND a spider
     that manages its own client outside Scrapy's downloader entirely (e.g.
     a Playwright-driven fallback) — see
-    apixproj/spiders/air_india_stealth_spider.py, which calls `.flag()`
-    directly from its own per-task exception handling.
+    apixproj/spiders/akasa_air_spider.py, which calls `.flag()` directly
+    from its own per-task exception handling.
     """
 
     def __init__(self):
