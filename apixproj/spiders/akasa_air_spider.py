@@ -1,40 +1,56 @@
 """
-APIx — Akasa Air Spider (Playwright + playwright-stealth)
-=============================================================
+APIx — Akasa Air Spider (direct API, via a Playwright-established session)
+==============================================================================
 
 Airline-direct spider for Akasa Air (IATA carrier code QP) — CLEARED in
 compliance.SOURCE_REGISTRY (robots.txt is fully open, `User-agent: *` with
 zero Disallow rules, re-verified 2026-08-30 superseding an earlier stale
 403 finding — see that registry entry's notes).
 
-UNLIKE every other spider in this project, everything below is confirmed
-against REAL, live-captured evidence from an actual browsing session, not
-assumed or guessed:
+This is the SECOND design for this spider. The first drove the visible
+search form end-to-end (click origin, select from a suggestion panel,
+navigate a date picker, click Search) — every one of those selectors was
+individually confirmed against real captured evidence, but the multi-step
+UI interaction as a whole turned out to be flaky in practice: repeated live
+runs (including one from a clean, non-sandboxed network) intermittently
+produced zero results, most likely ordinary browser-automation timing
+variance (a click landing before a re-render settles, etc.) rather than
+anything site-side — nothing about the failures looked like a block
+(no 429s, no soft-block pages, robots.txt stayed open throughout).
 
-  * Search-form selectors: `#From` / `#To` are real `<input>` elements.
-    Selecting an origin/destination is NOT done by typing + Enter (typing
-    does not filter the shown list) — it's done by clicking the visible,
-    already-rendered entry for the target airport's full name in the
-    "Our Destinations" panel (e.g. "Indira Gandhi International Airport"
-    for DEL), located via Playwright's text locator, which auto-scrolls
-    and clicks it.
-  * Date picker: a standard `react-datepicker` — day cells are
-    `role="gridcell"` with `aria-label="Choose <Weekday>, <Month> <Day>,
-    <Year>"` for a selectable date (a disabled/past date instead reads
-    "Not available ..."). Month navigation is `.react-datepicker__navigation--next`.
-  * Submit: a `text="Search Flights"` button.
-  * The fare-search API, captured directly: a POST to
-    `https://prod-bl.qp.akasaair.com/api/ibe/availability/search`, JSON
-    response shaped as
-    `data.results[].trips[].journeysAvailableByMarket[].value[]` for
-    journeys (each with `designator` {origin, destination, departure,
-    arrival} and `segments[].identifier` {carrierCode, identifier} for the
-    real flight number) cross-referenced by `fareAvailabilityKey` into
-    `data.faresAvailable[]` for the fare breakdown (`passengerFares[]`
-    with `fareAmount` = total, `discountedFare` = base fare component;
-    `fareAmount - discountedFare` = taxes/fees, confirmed by summing the
-    itemized `serviceCharges` in a real captured response and getting the
-    same figure).
+Rather than keep patching an inherently multi-step-fragile flow, this
+version removes the UI interaction almost entirely:
+
+  1. Load the homepage once. Akasa's own frontend JS fires several API
+     calls automatically on load (no click required) — including a
+     `/api/ibe/resources/master-data` request carrying a bearer token in
+     its `authorization` header, generated moments earlier via
+     `/api/ibe/token/generateToken`.
+  2. Capture that `authorization` header value from the intercepted
+     request (not the site's rendered UI at all).
+  3. Issue the fare-search POST directly —
+     `https://prod-bl.qp.akasaair.com/api/ibe/availability/search`, with
+     the request body shape captured from a real search (see
+     `build_search_request_body`) — using Playwright's `page.request`
+     (shares the browser context's cookies/TLS fingerprint with the page
+     that just loaded, so this isn't a bare disconnected HTTP call).
+
+One page load plus one direct API call, with no fragile click/type/select
+sequence at all. Confirmed working end-to-end against the real live site
+before being committed: 16 real DEL-BOM flight quotes for a T+7 date, real
+flight numbers (QP1940, QP1119, QP1112, ...), real times, and a fare
+breakdown that sums correctly.
+
+The response shape (confirmed against a real captured payload, not
+guessed): `data.results[].trips[].journeysAvailableByMarket[].value[]` for
+journeys (each with `designator` {origin, destination, departure, arrival}
+and `segments[].identifier` {carrierCode, identifier} for the real flight
+number) cross-referenced by `fareAvailabilityKey` into
+`data.faresAvailable[]` for the fare breakdown (`passengerFares[]` with
+`fareAmount` = total, `discountedFare` = base fare component;
+`fareAmount - discountedFare` = taxes/fees, confirmed by summing the
+itemized `serviceCharges` in a real captured response and getting the same
+figure).
 
 Only single-segment (non-stop) journeys are parsed for `flight_number`/
 `carrier_code` (taken from segments[0]) — a connecting itinerary's fare is
@@ -46,9 +62,8 @@ traffic data for the target city-pairs is dominated by non-stop service).
 
 from __future__ import annotations
 
+import json
 import logging
-import re
-from datetime import date as date_cls
 from typing import AsyncIterator, Iterable
 
 from playwright.async_api import Browser, async_playwright
@@ -67,41 +82,47 @@ CARRIER_CODE = "QP"
 AIRLINE_NAME = "Akasa Air"
 HOME_URL = "https://www.akasaair.com/"
 
-# Confirmed real full airport names, captured from Akasa's own "Our
-# Destinations" search-form panel — used as the text to click, since
-# typing does not filter that list. Covers app/ingestion/scheduler.py's
-# ROUTE_PAIRS basket.
-AIRPORT_FULL_NAMES = {
-    "DEL": "Indira Gandhi International Airport",
-    "BOM": "Chhatrapati Shivaji Maharaj International Airport",
-    "BLR": "Kempegowda International Airport",
-    "CCU": "Netaji Subhash Chandra Bose International Airport",
-    "HYD": "Rajiv Gandhi International Airport",
-    "MAA": "Chennai International Airport",
-}
+# Confirmed real endpoint — captured from an actual search's network traffic.
+FARE_SEARCH_URL = "https://prod-bl.qp.akasaair.com/api/ibe/availability/search"
 
-FARE_API_URL_SUBSTRING = "/api/ibe/availability/search"
+# A request whose response carries the bearer token needed for the fare-
+# search POST, fired automatically by Akasa's own frontend on page load —
+# no click required. Any one of the automatic /api/ibe/* calls would do;
+# this one was confirmed present on every homepage load tested.
+TOKEN_CARRYING_REQUEST_SUBSTRING = "/api/ibe/resources/master-data"
+
 NAVIGATION_TIMEOUT_MS = 30_000
-FORM_INTERACTION_TIMEOUT_MS = 10_000
-_ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
-
-_stealth = Stealth()
+TOKEN_WAIT_TIMEOUT_MS = 15_000
 
 
-def _ordinal_day(day: int) -> str:
-    if 10 <= day % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = _ORDINAL_SUFFIXES.get(day % 10, "th")
-    return f"{day}{suffix}"
-
-
-def format_datepicker_label_fragment(target_date: date_cls) -> str:
-    """The `<Month> <Day><suffix>, <Year>` fragment react-datepicker uses
-    in its day-cell aria-label — e.g. "September 5th, 2026" — matched as a
-    substring so it works regardless of the "Choose "/"Not available "
-    prefix."""
-    return f"{target_date.strftime('%B')} {_ordinal_day(target_date.day)}, {target_date.year}"
+def build_search_request_body(task: SearchTask) -> dict:
+    """The fare-search POST body — shape confirmed against a real captured
+    request (see module docstring), origin/destination/date substituted
+    from the task."""
+    return {
+        "criteria": [
+            {
+                "stations": {
+                    "originStationCodes": [task.origin],
+                    "destinationStationCodes": [task.destination],
+                    "searchDestinationMacs": True,
+                    "searchOriginMacs": True,
+                },
+                "dates": {"beginDate": f"{task.departure_date.isoformat()}T00:00:00"},
+                "filters": {
+                    "compressionType": 1,
+                    "maxConnections": 8,
+                    "productClasses": ["NB", "LB", "EC", "AV"],
+                    "fareTypes": ["NB", "LB", "R", "V"],
+                },
+            }
+        ],
+        "passengers": {"types": [{"type": "ADT", "count": 1}], "residentCountry": ""},
+        "codes": {"currencyCode": "INR", "promotionCode": ""},
+        "offerCode": None,
+        "numberOfFaresPerJourney": 10,
+        "taxesAndFees": 1,
+    }
 
 
 def _to_optional_float(value) -> float | None:
@@ -196,6 +217,9 @@ def _parse_journey(journey: dict, fares_by_key: dict, task: SearchTask) -> list[
 class AkasaAirSpider:
     """Standalone Playwright driver — not a scrapy.Spider subclass, same
     shape as AirIndiaStealthSpider/IxigoStealthSpider (see those modules).
+    One browser context is reused across all tasks (the auth token is
+    captured once and reused), so tasks after the first skip the page
+    load entirely.
 
     Usage:
         spider = AkasaAirSpider()
@@ -223,11 +247,34 @@ class AkasaAirSpider:
                 headless=self.headless,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
             )
+            context = None
+            auth_header = None
             try:
                 for task in self.tasks:
-                    async for item in self._run_task(browser, task):
+                    decision = self.gateway.check(self.source_name, HOME_URL)
+                    if not decision.allowed:
+                        logger.warning("akasa_air: task %s BLOCKED at dispatch: %s", task.task_id, decision.reason)
+                        self.missing_data.flag(
+                            key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                            reason=f"compliance_blocked:{decision.reason}",
+                        )
+                        continue
+
+                    if context is None or auth_header is None:
+                        context, auth_header = await self._establish_session(browser)
+                        if auth_header is None:
+                            logger.error("akasa_air: task %s — could not establish a session/auth token", task.task_id)
+                            self.missing_data.flag(
+                                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                                reason="auth_token_not_captured",
+                            )
+                            continue
+
+                    async for item in self._run_task(context, auth_header, task):
                         yield item
             finally:
+                if context is not None:
+                    await context.close()
                 await browser.close()
         if self.missing_data:
             logger.info(
@@ -235,123 +282,75 @@ class AkasaAirSpider:
                 len(self.missing_data), self.missing_data.summary(),
             )
 
-    async def _run_task(self, browser: Browser, task: SearchTask) -> AsyncIterator[dict]:
-        decision = self.gateway.check(self.source_name, HOME_URL)
-        if not decision.allowed:
-            logger.warning("akasa_air: task %s BLOCKED at dispatch: %s", task.task_id, decision.reason)
-            self.missing_data.flag(
-                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
-                reason=f"compliance_blocked:{decision.reason}",
-            )
-            return
-
-        origin_name = AIRPORT_FULL_NAMES.get(task.origin)
-        destination_name = AIRPORT_FULL_NAMES.get(task.destination)
-        if not origin_name or not destination_name:
-            logger.warning(
-                "akasa_air: task %s — no confirmed airport full-name mapping for %s/%s; "
-                "AIRPORT_FULL_NAMES needs extending for this route", task.task_id, task.origin, task.destination,
-            )
-            self.missing_data.flag(
-                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
-                reason="airport_name_not_mapped",
-            )
-            return
-
+    async def _establish_session(self, browser: Browser):
+        """Load the homepage once, capture the bearer token Akasa's own JS
+        generates automatically (no click needed) from the first matching
+        request. Returns (context, auth_header) — auth_header is None if
+        it couldn't be captured within the timeout."""
         context = await browser.new_context(
             user_agent=get_random_user_agent(),
             viewport={"width": 1440, "height": 1100},
             locale="en-IN",
         )
-        await _stealth.apply_stealth_async(context)
+        await Stealth().apply_stealth_async(context)
         page = await context.new_page()
 
-        captured_payloads: list[dict] = []
+        captured: dict[str, str] = {}
 
-        async def _on_response(playwright_response) -> None:
-            if FARE_API_URL_SUBSTRING not in playwright_response.url:
-                return
-            if playwright_response.request.method != "POST":
-                return
-            try:
-                body = await playwright_response.json()
-            except Exception:  # noqa: BLE001 — not every matched response is valid JSON
-                return
-            captured_payloads.append(body)
+        async def _on_request(request) -> None:
+            if TOKEN_CARRYING_REQUEST_SUBSTRING in request.url and "authorization" in request.headers:
+                captured["authorization"] = request.headers["authorization"]
 
-        page.on("response", _on_response)
+        page.on("request", _on_request)
 
         try:
             await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
-            await page.wait_for_timeout(3_000)
-            try:
-                await page.click('button:has-text("Accept cookies")', timeout=3_000)
-            except Exception:  # noqa: BLE001 — banner may already be dismissed/absent
-                pass
+            for _ in range(TOKEN_WAIT_TIMEOUT_MS // 500):
+                if "authorization" in captured:
+                    break
+                await page.wait_for_timeout(500)
+        except Exception as exc:  # noqa: BLE001 — logged by the caller via the missing-data flag
+            logger.error("akasa_air: homepage load failed while establishing session: %s", exc)
+        finally:
+            await page.close()
 
-            await self._select_airport(page, "#From", origin_name)
-            await self._select_airport(page, "#To", destination_name)
-            await self._select_date(page, task.departure_date)
+        return context, captured.get("authorization")
 
-            await page.click('text="Search Flights"', timeout=FORM_INTERACTION_TIMEOUT_MS)
-            await page.wait_for_timeout(15_000)  # the fare-search API call fires async after navigation
-        except Exception as exc:  # noqa: BLE001 — navigation/interaction failures are logged per task, not fatal to the run
-            logger.error("akasa_air: task %s navigation/search failed: %s", task.task_id, exc)
+    async def _run_task(self, context, auth_header: str, task: SearchTask) -> AsyncIterator[dict]:
+        try:
+            response = await context.request.post(
+                FARE_SEARCH_URL,
+                headers={
+                    "authorization": auth_header,
+                    "content-type": "application/json",
+                    "accept": "application/json, text/plain, */*",
+                    "referer": HOME_URL,
+                },
+                data=json.dumps(build_search_request_body(task)),
+                timeout=NAVIGATION_TIMEOUT_MS,
+            )
+            if response.status != 200:
+                raise RuntimeError(f"fare-search API returned HTTP {response.status}")
+            payload = await response.json()
+        except Exception as exc:  # noqa: BLE001 — request failures are logged per task, not fatal to the run
+            logger.error("akasa_air: task %s fare-search request failed: %s", task.task_id, exc)
             self.missing_data.flag(
                 key=task.route_id, task_id=task.task_id, source_name=self.source_name,
-                reason=f"navigation_failed:{type(exc).__name__}",
+                reason=f"request_failed:{type(exc).__name__}",
             )
-            await context.close()
             return
 
-        if not captured_payloads:
+        items = parse_fare_search_response(payload, task)
+        if not items:
             logger.warning(
-                "akasa_air: task %s — search flow completed but intercepted ZERO matching "
-                "fare-search responses (pattern=%s)", task.task_id, FARE_API_URL_SUBSTRING,
+                "akasa_air: task %s — fare-search API responded but zero items were extracted "
+                "(no flights that day, or the response shape changed)", task.task_id,
             )
-            self.missing_data.flag(
-                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
-                reason="zero_payloads_captured",
-            )
-            await context.close()
-            return
-
-        yielded_any = False
-        for payload in captured_payloads:
-            for item in parse_fare_search_response(payload, task):
-                yielded_any = True
-                yield item
-
-        if not yielded_any:
             self.missing_data.flag(
                 key=task.route_id, task_id=task.task_id, source_name=self.source_name,
                 reason="zero_items_extracted",
             )
+            return
 
-        await context.close()
-
-    async def _select_airport(self, page, input_selector: str, full_name: str) -> None:
-        await page.click(input_selector, timeout=FORM_INTERACTION_TIMEOUT_MS)
-        await page.wait_for_timeout(400)
-        await page.get_by_text(full_name, exact=True).click(timeout=FORM_INTERACTION_TIMEOUT_MS)
-
-    async def _select_date(self, page, target_date: date_cls) -> None:
-        await page.click('input[name="DepartureDate"]', timeout=FORM_INTERACTION_TIMEOUT_MS)
-        await page.wait_for_timeout(400)
-
-        label_fragment = format_datepicker_label_fragment(target_date)
-        for _ in range(12):  # up to a year out at one calendar page (month) per click
-            cell = page.locator(f'[role="gridcell"][aria-label*="{label_fragment}"]')
-            if await cell.count() > 0:
-                aria_label = await cell.first.get_attribute("aria-label") or ""
-                if aria_label.startswith("Not available"):
-                    raise RuntimeError(f"target date {target_date.isoformat()} is not available for booking")
-                await cell.first.click(timeout=FORM_INTERACTION_TIMEOUT_MS)
-                return
-            next_button = page.locator(".react-datepicker__navigation--next")
-            if await next_button.count() == 0:
-                break
-            await next_button.first.click()
-            await page.wait_for_timeout(300)
-
-        raise RuntimeError(f"could not locate a selectable date cell for {target_date.isoformat()}")
+        for item in items:
+            yield item

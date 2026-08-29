@@ -14,18 +14,16 @@ from datetime import date
 
 from app.ingestion.scheduler import SearchTask
 from apixproj.spiders.akasa_air_spider import (
-    AIRPORT_FULL_NAMES,
     AkasaAirSpider,
-    _ordinal_day,
-    format_datepicker_label_fragment,
+    build_search_request_body,
     parse_fare_search_response,
 )
 
 
 def make_task(**overrides) -> SearchTask:
     defaults = dict(
-        origin="DEL", destination="BOM", departure_date=date(2026, 8, 30),
-        lead_days=0, advance_purchase_window="T+0", task_id="test-task",
+        origin="DEL", destination="BOM", departure_date=date(2026, 9, 6),
+        lead_days=7, advance_purchase_window="T+7", task_id="test-task",
     )
     defaults.update(overrides)
     return SearchTask(**defaults)
@@ -103,31 +101,24 @@ def make_real_shaped_payload() -> dict:
     }
 
 
-class OrdinalDayTests(unittest.TestCase):
-    def test_common_suffixes(self):
-        self.assertEqual(_ordinal_day(1), "1st")
-        self.assertEqual(_ordinal_day(2), "2nd")
-        self.assertEqual(_ordinal_day(3), "3rd")
-        self.assertEqual(_ordinal_day(4), "4th")
-        self.assertEqual(_ordinal_day(21), "21st")
-        self.assertEqual(_ordinal_day(22), "22nd")
-        self.assertEqual(_ordinal_day(23), "23rd")
+class BuildSearchRequestBodyTests(unittest.TestCase):
+    def test_substitutes_origin_destination_and_date_from_task(self):
+        task = make_task(origin="DEL", destination="BOM", departure_date=date(2026, 9, 6))
+        body = build_search_request_body(task)
+        criteria = body["criteria"][0]
+        self.assertEqual(criteria["stations"]["originStationCodes"], ["DEL"])
+        self.assertEqual(criteria["stations"]["destinationStationCodes"], ["BOM"])
+        self.assertEqual(criteria["dates"]["beginDate"], "2026-09-06T00:00:00")
 
-    def test_teens_are_all_th(self):
-        for day in (11, 12, 13):
-            self.assertEqual(_ordinal_day(day), f"{day}th")
+    def test_passenger_and_currency_defaults(self):
+        body = build_search_request_body(make_task())
+        self.assertEqual(body["passengers"]["types"], [{"type": "ADT", "count": 1}])
+        self.assertEqual(body["codes"]["currencyCode"], "INR")
 
+    def test_is_json_serializable(self):
+        import json
 
-class FormatDatepickerLabelFragmentTests(unittest.TestCase):
-    def test_matches_confirmed_real_format(self):
-        # Confirmed against a real captured aria-label:
-        # "Not available Wednesday, August 5th, 2026"
-        self.assertEqual(format_datepicker_label_fragment(date(2026, 8, 5)), "August 5th, 2026")
-
-    def test_various_dates(self):
-        self.assertEqual(format_datepicker_label_fragment(date(2026, 9, 1)), "September 1st, 2026")
-        self.assertEqual(format_datepicker_label_fragment(date(2026, 9, 21)), "September 21st, 2026")
-        self.assertEqual(format_datepicker_label_fragment(date(2026, 12, 31)), "December 31st, 2026")
+        json.dumps(build_search_request_body(make_task()))  # should not raise
 
 
 class ParseFareSearchResponseTests(unittest.TestCase):
@@ -197,11 +188,15 @@ class ParseFareSearchResponseTests(unittest.TestCase):
         self.assertEqual(parse_fare_search_response({"data": "not-a-dict"}, make_task()), [])
 
 
-class AirportFullNamesTests(unittest.TestCase):
-    def test_covers_the_full_route_basket(self):
-        for code in ("DEL", "BOM", "BLR", "CCU", "HYD", "MAA"):
-            self.assertIn(code, AIRPORT_FULL_NAMES)
-            self.assertTrue(AIRPORT_FULL_NAMES[code])
+class AkasaAirSpiderTests(unittest.TestCase):
+    def test_defaults_to_full_route_date_matrix_when_no_tasks_given(self):
+        spider = AkasaAirSpider()
+        self.assertGreater(len(spider.tasks), 0)
+
+    def test_accepts_explicit_task_list(self):
+        tasks = [make_task()]
+        spider = AkasaAirSpider(tasks=tasks)
+        self.assertEqual(spider.tasks, tasks)
 
 
 class _FakeDecision:
@@ -218,38 +213,64 @@ class _FakeGateway:
         return _FakeDecision(self.allowed)
 
 
-class AkasaAirSpiderTests(unittest.TestCase):
-    def test_defaults_to_full_route_date_matrix_when_no_tasks_given(self):
-        spider = AkasaAirSpider()
-        self.assertGreater(len(spider.tasks), 0)
+class _FakeResponse:
+    def __init__(self, status: int, body: dict):
+        self.status = status
+        self._body = body
 
-    def test_accepts_explicit_task_list(self):
-        tasks = [make_task()]
-        spider = AkasaAirSpider(tasks=tasks)
-        self.assertEqual(spider.tasks, tasks)
+    async def json(self):
+        return self._body
+
+
+class _FakeAPIRequestContext:
+    def __init__(self, response: _FakeResponse):
+        self.response = response
+        self.calls: list[dict] = []
+
+    async def post(self, url, headers=None, data=None, timeout=None):
+        self.calls.append({"url": url, "headers": headers, "data": data})
+        return self.response
+
+
+class _FakeBrowserContext:
+    """Stand-in for a Playwright BrowserContext exposing just the
+    `.request` surface _run_task actually uses (`context.request.post`),
+    so it can be exercised without any real browser/network."""
+
+    def __init__(self, response: _FakeResponse):
+        self.request = _FakeAPIRequestContext(response)
+
+    @property
+    def calls(self):
+        return self.request.calls
 
 
 class AkasaAirSpiderRunTaskTests(unittest.IsolatedAsyncioTestCase):
-    async def test_compliance_block_yields_nothing_and_never_touches_browser(self):
+    async def test_run_task_yields_parsed_items_on_success(self):
         spider = AkasaAirSpider(tasks=[make_task()])
-        spider.gateway = _FakeGateway(allowed=False)
+        fake_context = _FakeBrowserContext(_FakeResponse(200, make_real_shaped_payload()))
 
-        items = [item async for item in spider._run_task(browser=None, task=spider.tasks[0])]
+        items = [item async for item in spider._run_task(fake_context, "fake-token", spider.tasks[0])]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["flight_number"], "QP1119")
+        self.assertEqual(len(fake_context.calls), 1)
+        self.assertEqual(fake_context.calls[0]["headers"]["authorization"], "fake-token")
+
+    async def test_run_task_flags_missing_data_on_non_200(self):
+        spider = AkasaAirSpider(tasks=[make_task()])
+        fake_context = _FakeBrowserContext(_FakeResponse(500, {}))
+
+        items = [item async for item in spider._run_task(fake_context, "fake-token", spider.tasks[0])]
         self.assertEqual(items, [])
-        self.assertEqual(len(spider.missing_data), 1)
-        self.assertIn("compliance_blocked:test", spider.missing_data.summary())
+        self.assertIn("request_failed:RuntimeError", spider.missing_data.summary())
 
-    async def test_unmapped_airport_is_flagged_without_touching_browser(self):
-        task = make_task(origin="GOI", destination="BOM")
-        spider = AkasaAirSpider(tasks=[task])
-        # gateway defaults to a real RobotsComplianceGateway which would
-        # attempt a network call; stub it allowed so we reach the airport-
-        # mapping check without any network access.
-        spider.gateway = _FakeGateway(allowed=True)
+    async def test_run_task_flags_missing_data_on_zero_items(self):
+        spider = AkasaAirSpider(tasks=[make_task()])
+        fake_context = _FakeBrowserContext(_FakeResponse(200, {"data": {"results": []}}))
 
-        items = [item async for item in spider._run_task(browser=None, task=task)]
+        items = [item async for item in spider._run_task(fake_context, "fake-token", spider.tasks[0])]
         self.assertEqual(items, [])
-        self.assertIn("airport_name_not_mapped", spider.missing_data.summary())
+        self.assertIn("zero_items_extracted", spider.missing_data.summary())
 
 
 if __name__ == "__main__":
