@@ -17,6 +17,7 @@ one is what a spider itself can produce with no database access at all.
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 
 RAW_FARE_ITEM_FIELDS = (
@@ -82,3 +83,19 @@ def build_raw_fare_item(
         "source_type": source_type,
         "route_id": f"{origin}-{destination}",
     }
+
+
+def write_raw_fare_items_csv(items: list[dict], path: str) -> None:
+    """Write raw fare items to `path` as CSV, one row per item, columns in
+    RAW_FARE_ITEM_FIELDS order regardless of key order in the dicts —
+    the one canonical layout every run produces, so files from different
+    runs/sources line up column-for-column. A field absent from a given
+    item (shouldn't happen for anything built via build_raw_fare_item, but
+    csv.DictWriter would otherwise raise on a genuinely malformed dict)
+    is written as an empty cell rather than erroring the whole export.
+    """
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=RAW_FARE_ITEM_FIELDS, restval="", extrasaction="ignore")
+        writer.writeheader()
+        for item in items:
+            writer.writerow(item)

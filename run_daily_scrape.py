@@ -6,8 +6,10 @@ APIx — Full Route x Date-Matrix Scrape Runner
 Runs the complete route x advance-purchase-window basket
 (app/ingestion/scheduler.py: 6 city pairs x T+1/T+7/T+15/T+30/T+45 = 30
 tasks) through AkasaAirSpider, collecting every real fare quote it can get
-and writing them to one JSON file — the "give me real data for the whole
-basket" counterpart to test_scraper.py's single-query verification tool.
+and writing them to a JSON file AND a CSV file (same data, same canonical
+column order — see apixproj/raw_fare_item.py's RAW_FARE_ITEM_FIELDS) — the
+"give me real data for the whole basket" counterpart to test_scraper.py's
+single-query verification tool.
 
     python run_daily_scrape.py
 
@@ -30,8 +32,10 @@ import sys
 from collections import defaultdict
 
 from app.ingestion.scheduler import AP_WINDOWS_DAYS, ROUTE_PAIRS, RouteDateMatrixScheduler
+from apixproj.raw_fare_item import write_raw_fare_items_csv
 
-OUTPUT_PATH = "apix_daily_scrape.json"
+OUTPUT_JSON_PATH = "apix_daily_scrape.json"
+OUTPUT_CSV_PATH = "apix_daily_scrape.csv"
 
 
 async def run_batch() -> tuple[list[dict], dict]:
@@ -78,11 +82,12 @@ def render_coverage_matrix(items: list[dict]) -> str:
 def main() -> int:
     items, missing_summary = asyncio.run(run_batch())
 
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+    with open(OUTPUT_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, indent=2, ensure_ascii=False, default=str)
+    write_raw_fare_items_csv(items, OUTPUT_CSV_PATH)
 
     print()
-    print(f"Saved {len(items)} raw fare quote(s) to {OUTPUT_PATH}")
+    print(f"Saved {len(items)} raw fare quote(s) to {OUTPUT_JSON_PATH} and {OUTPUT_CSV_PATH}")
     print()
     print("Coverage (quotes collected per route x AP-window):")
     print(render_coverage_matrix(items))

@@ -207,25 +207,3 @@ class RouteDateMatrixScheduler:
 
     def __iter__(self) -> Iterator[SearchTask]:
         return iter(list(self._queue))
-
-
-# --------------------------------------------------------------------------
-# Legacy job type — produced by the politeness/compliance-aware scheduler at
-# the repo root (build_daily_job_matrix) and consumed by the spider layer
-# (app/ingestion/spiders/base_spider.py). Kept here unchanged so existing
-# imports of `app.ingestion.scheduler.ScrapeJob` keep working; unrelated to
-# the SearchTask matrix generator above, which has no scheduled_time /
-# priority / source concept of its own.
-# --------------------------------------------------------------------------
-
-
-@dataclass
-class ScrapeJob:
-    job_id: str
-    route_id: str
-    source_name: str
-    advance_purchase_window: str
-    advance_purchase_days: int
-    travel_date: date
-    scheduled_time: datetime
-    priority: float = 0.0
