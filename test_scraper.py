@@ -147,6 +147,23 @@ def fetch_airline(task: SearchTask) -> list[dict]:
     return asyncio.run(_fetch_airline_async(task))
 
 
+async def _fetch_ixigo_async(task: SearchTask) -> list[dict]:
+    from apixproj.spiders.ota_ixigo_stealth_spider import IxigoStealthSpider
+
+    spider = IxigoStealthSpider(tasks=[task])
+    items = [item async for item in spider.run()]
+    return items
+
+
+def fetch_ixigo(task: SearchTask) -> list[dict]:
+    """One live fetch against Ixigo via the Playwright + stealth fallback
+    (apixproj/spiders/ota_ixigo_stealth_spider.py) — the OTA target used
+    when Yatra can't be reached at all (see that module's docstring for
+    why a browser-driven approach is required here, and what's still
+    unconfirmed about the exact fare-search endpoint)."""
+    return asyncio.run(_fetch_ixigo_async(task))
+
+
 def load_replay_payload(path: str, task: SearchTask, source: str) -> list[dict]:
     """Offline path: parse a previously-saved JSON payload with the same
     source-specific parser a live run would use, so the table/JSON/assertion
@@ -158,6 +175,11 @@ def load_replay_payload(path: str, task: SearchTask, source: str) -> list[dict]:
         from apixproj.spiders.ota_yatra_spider import extract_yatra_fare_items
 
         return extract_yatra_fare_items(payload, task)
+
+    if source == "ixigo":
+        from apixproj.spiders.ota_ixigo_stealth_spider import parse_fare_json
+
+        return parse_fare_json(payload, task)
 
     from apixproj.spiders.air_india_stealth_spider import parse_fare_json
 
@@ -224,7 +246,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--origin", required=True, help="origin airport code, e.g. DEL")
     parser.add_argument("--destination", required=True, help="destination airport code, e.g. BOM")
     parser.add_argument("--days", type=int, required=True, help="advance-purchase lead days (T+N)")
-    parser.add_argument("--source", choices=["ota", "airline"], required=True)
+    parser.add_argument(
+        "--source", choices=["ota", "ixigo", "airline"], required=True,
+        help="'ota' = Yatra, 'ixigo' = Ixigo (fallback OTA when Yatra is unreachable), "
+             "'airline' = Air India",
+    )
     parser.add_argument(
         "--replay", metavar="PATH",
         help="skip the live network fetch and parse a previously-saved JSON payload instead "
@@ -243,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         items = load_replay_payload(args.replay, task, args.source)
     elif args.source == "ota":
         items = fetch_ota(task)
+    elif args.source == "ixigo":
+        items = fetch_ixigo(task)
     else:
         items = fetch_airline(task)
 
