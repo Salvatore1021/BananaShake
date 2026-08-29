@@ -341,40 +341,31 @@ class IxigoStealthSpider:
         first autocomplete suggestion — see `_fill_search_form` for why
         this replaced a bare Enter keypress.
 
-        A second and third live run (see commit history / debug
-        screenshots) showed the origin dropdown staying open and
-        IDENTICAL across attempts despite this method supposedly clicking
-        an option and pressing Tab — strong evidence the bare
-        `[role="option"]` locator wasn't matching anything inside the
-        actually-open suggestion list at all (this is a content-heavy page
-        with several other dropdowns/carousels that could easily contain
-        an earlier, invisible `role="option"` element in DOM order), so
-        every attempt silently fell through to the Enter-only fallback,
-        which doesn't reliably close the panel. Scoping the locator to
-        `[role="listbox"] [role="option"]` targets an option specifically
-        inside a listbox, which should resolve to the actually-open one.
-        Tab (not Escape — many autocomplete widgets treat Escape as
-        "cancel the selection", which risks undoing it) is the standard
-        "confirm this field and move on" keystroke.
-
-        STILL UNCONFIRMED as of this pass: the `role="listbox"` scoping
-        fix above has not itself been verified against a live page yet —
-        it's the best-reasoned next step from the evidence gathered, not a
-        proven fix. See the session's conversation for the full diagnostic
-        trail before assuming this resolves it.
+        CONFIRMED against a real saved DOM dump (three prior attempts all
+        guessed `role="option"`/`role="listbox"`, which — checked directly
+        against the saved HTML after those attempts kept producing
+        pixel-identical screenshots — appear ZERO times on this page; every
+        prior attempt was silently falling through to the Enter-only
+        fallback the whole time). The real suggestion rows are plain
+        `role="listitem"` elements, each containing the airport code,
+        city/country name, and full airport name as separate text nodes —
+        confirmed selector, not a guess. Tab (not Escape — many
+        autocomplete widgets treat Escape as "cancel the selection", which
+        risks undoing it) is used afterward as the "confirm this field and
+        move on" keystroke to close the panel.
         """
         await page.keyboard.type(query, delay=80)
         try:
-            option = page.locator('[role="listbox"] [role="option"]').first
+            option = page.locator('[role="listitem"]').first
             await option.wait_for(state="visible", timeout=4_000)
             await option.click()
-        except Exception:  # noqa: BLE001 — fall back to Enter if no ARIA option surfaced
+        except Exception:  # noqa: BLE001 — fall back to Enter if no listitem surfaced
             await page.wait_for_timeout(800)
             await page.keyboard.press("Enter")
 
         await page.keyboard.press("Tab")
         try:
-            await page.locator('[role="option"]').first.wait_for(state="hidden", timeout=3_000)
+            await page.locator('[role="listitem"]').first.wait_for(state="hidden", timeout=3_000)
         except Exception:  # noqa: BLE001 — best-effort: proceed even if we can't confirm the panel closed
             pass
 
