@@ -165,6 +165,23 @@ def fetch_ixigo(task: SearchTask, debug_dir: str | None = None) -> list[dict]:
     return asyncio.run(_fetch_ixigo_async(task, debug_dir))
 
 
+async def _fetch_akasa_async(task: SearchTask) -> list[dict]:
+    from apixproj.spiders.akasa_air_spider import AkasaAirSpider
+
+    spider = AkasaAirSpider(tasks=[task])
+    items = [item async for item in spider.run()]
+    return items
+
+
+def fetch_akasa(task: SearchTask) -> list[dict]:
+    """One live fetch against Akasa Air (apixproj/spiders/akasa_air_spider.py)
+    — CLEARED in compliance.SOURCE_REGISTRY (fully open robots.txt), and
+    the only source in this project whose selectors and fare-search API
+    are confirmed against a real captured session end-to-end rather than
+    an educated guess."""
+    return asyncio.run(_fetch_akasa_async(task))
+
+
 def load_replay_payload(path: str, task: SearchTask, source: str) -> list[dict]:
     """Offline path: parse a previously-saved JSON payload with the same
     source-specific parser a live run would use, so the table/JSON/assertion
@@ -181,6 +198,11 @@ def load_replay_payload(path: str, task: SearchTask, source: str) -> list[dict]:
         from apixproj.spiders.ota_ixigo_stealth_spider import parse_fare_json
 
         return parse_fare_json(payload, task)
+
+    if source == "akasa":
+        from apixproj.spiders.akasa_air_spider import parse_fare_search_response
+
+        return parse_fare_search_response(payload, task)
 
     from apixproj.spiders.air_india_stealth_spider import parse_fare_json
 
@@ -248,9 +270,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--destination", required=True, help="destination airport code, e.g. BOM")
     parser.add_argument("--days", type=int, required=True, help="advance-purchase lead days (T+N)")
     parser.add_argument(
-        "--source", choices=["ota", "ixigo", "airline"], required=True,
+        "--source", choices=["ota", "ixigo", "akasa", "airline"], required=True,
         help="'ota' = Yatra, 'ixigo' = Ixigo (fallback OTA when Yatra is unreachable), "
-             "'airline' = Air India",
+             "'akasa' = Akasa Air (confirmed working end-to-end), 'airline' = Air India",
     )
     parser.add_argument(
         "--replay", metavar="PATH",
@@ -277,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
         items = fetch_ota(task)
     elif args.source == "ixigo":
         items = fetch_ixigo(task, debug_dir=args.debug_dir)
+    elif args.source == "akasa":
+        items = fetch_akasa(task)
     else:
         items = fetch_airline(task)
 

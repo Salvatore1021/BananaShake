@@ -198,10 +198,13 @@ SOURCE_REGISTRY: dict[str, SourceProfile] = {
     ),
     "akasa_air": SourceProfile(
         name="akasa_air", domain="www.akasaair.com", source_type="airline_direct",
-        tos_review_status=TosReviewStatus.PENDING_LEGAL_REVIEW,
-        notes="robots.txt itself returned 403 to a plain fetch — edge WAF blocks "
-              "non-browser requests outright. Needs re-verification from a real "
-              "browser session before any automation is considered.",
+        tos_review_status=TosReviewStatus.CLEARED,
+        notes="Re-verified 2026-08-30: robots.txt is now fully open (`User-agent: *` "
+              "with zero Disallow rules — no blanket disallow, more permissive than "
+              "Air India's own CLEARED entry) superseding the earlier 403-to-a-plain-"
+              "fetch finding, which no longer reproduces. Cleared on the same basis "
+              "Air India was: no conflicting robots.txt signal found. Still subject "
+              "to per-request robots.txt check at dispatch time.",
     ),
     "yatra": SourceProfile(
         name="yatra", domain="www.yatra.com", source_type="ota",
