@@ -147,21 +147,22 @@ def fetch_airline(task: SearchTask) -> list[dict]:
     return asyncio.run(_fetch_airline_async(task))
 
 
-async def _fetch_ixigo_async(task: SearchTask) -> list[dict]:
+async def _fetch_ixigo_async(task: SearchTask, debug_dir: str | None) -> list[dict]:
     from apixproj.spiders.ota_ixigo_stealth_spider import IxigoStealthSpider
 
-    spider = IxigoStealthSpider(tasks=[task])
+    spider = IxigoStealthSpider(tasks=[task], debug_dir=debug_dir)
     items = [item async for item in spider.run()]
     return items
 
 
-def fetch_ixigo(task: SearchTask) -> list[dict]:
+def fetch_ixigo(task: SearchTask, debug_dir: str | None = None) -> list[dict]:
     """One live fetch against Ixigo via the Playwright + stealth fallback
     (apixproj/spiders/ota_ixigo_stealth_spider.py) — the OTA target used
     when Yatra can't be reached at all (see that module's docstring for
     why a browser-driven approach is required here, and what's still
-    unconfirmed about the exact fare-search endpoint)."""
-    return asyncio.run(_fetch_ixigo_async(task))
+    unconfirmed about the exact fare-search endpoint). Pass `debug_dir` to
+    save a screenshot + HTML dump on failure."""
+    return asyncio.run(_fetch_ixigo_async(task, debug_dir))
 
 
 def load_replay_payload(path: str, task: SearchTask, source: str) -> list[dict]:
@@ -256,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the live network fetch and parse a previously-saved JSON payload instead "
              "(offline self-verification of the table/JSON/assertion logic)",
     )
+    parser.add_argument(
+        "--debug-dir", metavar="DIR",
+        help="(ixigo/airline only) on a navigation/search failure, save a screenshot + full "
+             "HTML dump of the page into this directory",
+    )
     args = parser.parse_args(argv)
 
     task = build_task(args.origin, args.destination, args.days)
@@ -270,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.source == "ota":
         items = fetch_ota(task)
     elif args.source == "ixigo":
-        items = fetch_ixigo(task)
+        items = fetch_ixigo(task, debug_dir=args.debug_dir)
     else:
         items = fetch_airline(task)
 

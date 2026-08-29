@@ -176,11 +176,17 @@ class IxigoStealthSpider:
         tasks: Iterable[SearchTask] | None = None,
         headless: bool = True,
         missing_data: MissingDataTracker | None = None,
+        debug_dir: str | None = None,
     ):
         self.tasks = list(tasks) if tasks is not None else RouteDateMatrixScheduler().build()
         self.headless = headless
         self.gateway = RobotsComplianceGateway()
         self.missing_data = missing_data or MissingDataTracker()
+        # When set, a screenshot + full HTML dump is saved here on any
+        # navigation/search failure — the fastest way to close the loop on
+        # "what did the page actually look like" without another round of
+        # guessing from log text alone.
+        self.debug_dir = debug_dir
 
     async def run(self) -> AsyncIterator[dict]:
         async with async_playwright() as pw:
@@ -242,11 +248,26 @@ class IxigoStealthSpider:
         page.on("response", _on_response)
 
         try:
-            await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+            # networkidle, not domcontentloaded: three consecutive live runs
+            # produced PIXEL-IDENTICAL debug screenshots despite exercising
+            # different code paths in _fill_search_form (option-click vs.
+            # Enter fallback, with/without a trailing Tab) — the strongest
+            # evidence available that none of those interactions were
+            # taking effect at all, not that the wrong element was being
+            # targeted. This is a heavy client-hydrated Next.js app
+            # (~30 JS chunks on the homepage alone); domcontentloaded fires
+            # before React finishes attaching its event handlers, so clicks
+            # sent immediately after it can land on DOM nodes that are
+            # visually present but not yet wired up. This fix is REASONED
+            # FROM EVIDENCE but has not itself been live-verified — the
+            # next run should confirm whether it actually changes the
+            # captured screenshot, not just assume it does.
+            await page.goto(HOME_URL, wait_until="networkidle", timeout=NAVIGATION_TIMEOUT_MS)
             await self._fill_search_form(page, task)
             await page.wait_for_timeout(6_000)  # let the results page's XHRs land
         except Exception as exc:  # noqa: BLE001 — navigation/interaction failures are logged per task, not fatal to the run
             logger.error("ixigo_stealth: task %s navigation/search failed: %s", task.task_id, exc)
+            await self._save_debug_artifacts(page, task)
             self.missing_data.flag(
                 key=task.route_id, task_id=task.task_id, source_name=self.source_name,
                 reason=f"navigation_failed:{type(exc).__name__}",
@@ -278,24 +299,29 @@ class IxigoStealthSpider:
         """Fill origin/destination via the confirmed selectors and submit.
         City-name typing (rather than the 3-letter code) is used for the
         origin/destination fields since that's how the visible search box
-        behaves for a human — the exact autocomplete-option selector for
-        picking the right suggestion is NOT yet confirmed (see module
-        docstring); this presses Enter after typing as a best-effort
-        substitute, which is the piece most likely to need correcting on
-        the next non-rate-limited run.
+        behaves for a human.
+
+        A first live run through this code (see commit history) showed a
+        bare Enter-keypress leaving the destination field permanently
+        "not visible" — strong evidence Enter alone wasn't registering an
+        actual selection, just closing (or not closing) the suggestion
+        list without picking anything. `_select_autocomplete_suggestion`
+        now tries clicking a standard ARIA `role="option"` item first (the
+        common, accessible pattern most autocomplete widgets use) and only
+        falls back to bare Enter if no such option appears — still a
+        best-effort heuristic, not a confirmed selector (see module
+        docstring), but a more principled one than before.
         """
         origin_query = _AIRPORT_CITY_NAMES.get(task.origin, task.origin)
         destination_query = _AIRPORT_CITY_NAMES.get(task.destination, task.destination)
 
         await page.click(ORIGIN_SELECTOR, timeout=FORM_INTERACTION_TIMEOUT_MS)
-        await page.keyboard.type(origin_query, delay=80)
-        await page.wait_for_timeout(1200)
-        await page.keyboard.press("Enter")
+        await self._select_autocomplete_suggestion(page, origin_query)
+        await page.wait_for_selector(DESTINATION_SELECTOR, state="visible", timeout=FORM_INTERACTION_TIMEOUT_MS)
 
         await page.click(DESTINATION_SELECTOR, timeout=FORM_INTERACTION_TIMEOUT_MS)
-        await page.keyboard.type(destination_query, delay=80)
-        await page.wait_for_timeout(1200)
-        await page.keyboard.press("Enter")
+        await self._select_autocomplete_suggestion(page, destination_query)
+        await page.wait_for_timeout(500)
 
         for selector in SEARCH_BUTTON_SELECTORS:
             button = await page.query_selector(selector)
@@ -308,6 +334,70 @@ class IxigoStealthSpider:
             "that list is unconfirmed and needs updating against a live page.",
             task.task_id,
         )
+
+    @staticmethod
+    async def _select_autocomplete_suggestion(page, query: str) -> None:
+        """Type `query` into the currently-focused input and select the
+        first autocomplete suggestion — see `_fill_search_form` for why
+        this replaced a bare Enter keypress.
+
+        A second and third live run (see commit history / debug
+        screenshots) showed the origin dropdown staying open and
+        IDENTICAL across attempts despite this method supposedly clicking
+        an option and pressing Tab — strong evidence the bare
+        `[role="option"]` locator wasn't matching anything inside the
+        actually-open suggestion list at all (this is a content-heavy page
+        with several other dropdowns/carousels that could easily contain
+        an earlier, invisible `role="option"` element in DOM order), so
+        every attempt silently fell through to the Enter-only fallback,
+        which doesn't reliably close the panel. Scoping the locator to
+        `[role="listbox"] [role="option"]` targets an option specifically
+        inside a listbox, which should resolve to the actually-open one.
+        Tab (not Escape — many autocomplete widgets treat Escape as
+        "cancel the selection", which risks undoing it) is the standard
+        "confirm this field and move on" keystroke.
+
+        STILL UNCONFIRMED as of this pass: the `role="listbox"` scoping
+        fix above has not itself been verified against a live page yet —
+        it's the best-reasoned next step from the evidence gathered, not a
+        proven fix. See the session's conversation for the full diagnostic
+        trail before assuming this resolves it.
+        """
+        await page.keyboard.type(query, delay=80)
+        try:
+            option = page.locator('[role="listbox"] [role="option"]').first
+            await option.wait_for(state="visible", timeout=4_000)
+            await option.click()
+        except Exception:  # noqa: BLE001 — fall back to Enter if no ARIA option surfaced
+            await page.wait_for_timeout(800)
+            await page.keyboard.press("Enter")
+
+        await page.keyboard.press("Tab")
+        try:
+            await page.locator('[role="option"]').first.wait_for(state="hidden", timeout=3_000)
+        except Exception:  # noqa: BLE001 — best-effort: proceed even if we can't confirm the panel closed
+            pass
+
+    async def _save_debug_artifacts(self, page, task: SearchTask) -> None:
+        """Best-effort screenshot + full HTML dump on failure, when
+        `self.debug_dir` is set — never allowed to mask the real error."""
+        if not self.debug_dir:
+            return
+        import os
+
+        os.makedirs(self.debug_dir, exist_ok=True)
+        base = os.path.join(self.debug_dir, task.task_id.replace(":", "_").replace("/", "_"))
+        try:
+            await page.screenshot(path=f"{base}.png", full_page=True)
+            html = await page.content()
+            with open(f"{base}.html", "w", encoding="utf-8") as f:
+                f.write(html)
+            logger.info(
+                "ixigo_stealth: task %s — saved debug screenshot/HTML to %s.png / %s.html",
+                task.task_id, base, base,
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed debug capture must not hide the original failure
+            logger.debug("ixigo_stealth: task %s — could not save debug artifacts: %s", task.task_id, exc)
 
 
 # Minimal IATA-code -> city-name lookup for the route basket this project
