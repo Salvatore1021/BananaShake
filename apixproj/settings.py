@@ -48,8 +48,22 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 1.0
 RETRY_ENABLED = True
 RETRY_TIMES = 2
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
+COOKIES_ENABLED = True  # required for SessionCookieMiddleware's per-source cookiejars to persist anything
 
 LOG_LEVEL = "INFO"
+
+# Priority numbers: lower = closer to the engine, higher = closer to the
+# downloader. process_request runs low->high; process_response runs
+# high->low (reverse) — see middlewares.py's docstring for why
+# ExponentialBackoffMiddleware (550) must sit downloader-side of
+# AntiBotBackoffMiddleware (543), and SessionCookieMiddleware (100) must
+# sit engine-side of Scrapy's own CookiesMiddleware (700, from
+# DOWNLOADER_MIDDLEWARES_BASE).
+DOWNLOADER_MIDDLEWARES = {
+    "middlewares.SessionCookieMiddleware": 100,
+    "middlewares.AntiBotBackoffMiddleware": 543,
+    "middlewares.ExponentialBackoffMiddleware": 550,
+}
 
 APIX_DATABASE_URL = "sqlite:///apix_demo.db"
 ITEM_PIPELINES = {

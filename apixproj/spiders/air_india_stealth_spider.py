@@ -48,7 +48,6 @@ worked example this reuses the assumed JSON shape from):
 from __future__ import annotations
 
 import logging
-import random
 import re
 from typing import AsyncIterator, Iterable
 
@@ -57,7 +56,8 @@ from playwright_stealth import Stealth
 
 from apixproj.raw_fare_item import build_raw_fare_item
 from app.ingestion.scheduler import RouteDateMatrixScheduler, SearchTask
-from compliance import USER_AGENT_POOL, RobotsComplianceGateway
+from compliance import RobotsComplianceGateway, get_random_user_agent
+from middlewares import MissingDataTracker
 
 logger = logging.getLogger("apix.airline.air_india_stealth")
 
@@ -148,18 +148,30 @@ class AirIndiaStealthSpider:
     going through Scrapy's downloader (there is no HTTP request/response
     cycle to hand to Scrapy here; the browser itself is the client).
 
+    Every task this driver gives up on (compliance-blocked, navigation
+    failure, zero matching responses intercepted) is logged AND recorded in
+    `self.missing_data` rather than raising — one bad/blocked route never
+    aborts the rest of the batch; see MissingDataTracker in middlewares.py.
+
     Usage:
         spider = AirIndiaStealthSpider()
         async for item in spider.run():
             ...
+        print(spider.missing_data.summary())
     """
 
     source_name = SOURCE_NAME
 
-    def __init__(self, tasks: Iterable[SearchTask] | None = None, headless: bool = True):
+    def __init__(
+        self,
+        tasks: Iterable[SearchTask] | None = None,
+        headless: bool = True,
+        missing_data: MissingDataTracker | None = None,
+    ):
         self.tasks = list(tasks) if tasks is not None else RouteDateMatrixScheduler().build()
         self.headless = headless
         self.gateway = RobotsComplianceGateway()
+        self.missing_data = missing_data or MissingDataTracker()
 
     async def run(self) -> AsyncIterator[dict]:
         async with async_playwright() as pw:
@@ -173,16 +185,25 @@ class AirIndiaStealthSpider:
                         yield item
             finally:
                 await browser.close()
+        if self.missing_data:
+            logger.info(
+                "air_india_stealth: run finished with %d missing-data flag(s): %s",
+                len(self.missing_data), self.missing_data.summary(),
+            )
 
     async def _run_task(self, browser: Browser, task: SearchTask) -> AsyncIterator[dict]:
         url = build_search_url(task)
         decision = self.gateway.check(self.source_name, url)
         if not decision.allowed:
             logger.warning("air_india_stealth: task %s BLOCKED at dispatch: %s", task.task_id, decision.reason)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason=f"compliance_blocked:{decision.reason}",
+            )
             return
 
         context = await browser.new_context(
-            user_agent=random.choice(USER_AGENT_POOL),
+            user_agent=get_random_user_agent(),
             viewport={"width": 1440, "height": 1100},
             locale="en-US",
         )
@@ -210,6 +231,10 @@ class AirIndiaStealthSpider:
             await page.goto(url, wait_until="networkidle", timeout=NAVIGATION_TIMEOUT_MS)
         except Exception as exc:  # noqa: BLE001 — navigation failures are logged per task, not fatal to the run
             logger.error("air_india_stealth: task %s navigation failed: %s", task.task_id, exc)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason=f"navigation_failed:{type(exc).__name__}",
+            )
             await context.close()
             return
 
@@ -219,6 +244,10 @@ class AirIndiaStealthSpider:
                 "responses (pattern=%s). Either the site changed its API shape, the page didn't "
                 "fully load, or FARE_API_URL_PATTERN needs updating.",
                 task.task_id, FARE_API_URL_PATTERN.pattern,
+            )
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason="zero_payloads_captured",
             )
             await context.close()
             return

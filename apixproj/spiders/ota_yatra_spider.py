@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
 from typing import Iterable
 
@@ -58,7 +57,8 @@ from scrapy.http import Response
 
 from apixproj.raw_fare_item import build_raw_fare_item
 from app.ingestion.scheduler import RouteDateMatrixScheduler, SearchTask
-from compliance import USER_AGENT_POOL, RobotsComplianceGateway
+from compliance import RobotsComplianceGateway, get_random_user_agent
+from middlewares import MissingDataTracker
 
 logger = logging.getLogger("apix.ota.yatra")
 
@@ -92,7 +92,7 @@ def build_realistic_headers(*, referer: str, origin_header: str | None = None) -
     header set that's trivially fingerprinted, so the two are derived
     together rather than set independently.
     """
-    user_agent = random.choice(USER_AGENT_POOL)
+    user_agent = get_random_user_agent()
     is_chromium_family = "Chrome" in user_agent or "Edg" in user_agent
 
     headers = {
@@ -214,10 +214,24 @@ class YatraFareSpider(scrapy.Spider):
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
     }
 
-    def __init__(self, tasks: Iterable[SearchTask] | None = None, *args, **kwargs):
+    def __init__(
+        self,
+        tasks: Iterable[SearchTask] | None = None,
+        missing_data: MissingDataTracker | None = None,
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.tasks = list(tasks) if tasks is not None else RouteDateMatrixScheduler().build()
         self.gateway = RobotsComplianceGateway()
+        self.missing_data = missing_data or MissingDataTracker()
+
+    def closed(self, reason):
+        if self.missing_data:
+            logger.info(
+                "yatra: run finished with %d missing-data flag(s): %s",
+                len(self.missing_data), self.missing_data.summary(),
+            )
 
     def start_requests(self):
         for task in self.tasks:
@@ -228,6 +242,10 @@ class YatraFareSpider(scrapy.Spider):
             decision = self.gateway.check(self.source_name, url)
             if not decision.allowed:
                 logger.warning("yatra: task %s BLOCKED at dispatch: %s", task.task_id, decision.reason)
+                self.missing_data.flag(
+                    key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                    reason=f"compliance_blocked:{decision.reason}",
+                )
                 if getattr(self, "crawler", None) is not None:
                     self.crawler.stats.inc_value("compliance/blocked_at_dispatch")
                 continue
@@ -249,6 +267,10 @@ class YatraFareSpider(scrapy.Spider):
                 "yatra: task %s — could not extract searchId from the search-results page; "
                 "SEARCH_ID_PATTERN likely needs updating against a live capture", task.task_id,
             )
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason="search_id_not_found",
+            )
             self.crawler.stats.inc_value("extraction/search_id_not_found")
             return
 
@@ -256,6 +278,10 @@ class YatraFareSpider(scrapy.Spider):
         decision = self.gateway.check(self.source_name, price_url)
         if not decision.allowed:
             logger.warning("yatra: task %s price endpoint BLOCKED at dispatch: %s", task.task_id, decision.reason)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason=f"compliance_blocked:{decision.reason}",
+            )
             self.crawler.stats.inc_value("compliance/blocked_at_dispatch")
             return
 
@@ -276,12 +302,20 @@ class YatraFareSpider(scrapy.Spider):
             payload = json.loads(response.text)
         except json.JSONDecodeError:
             logger.warning("yatra: task %s — price endpoint returned a non-JSON body", task.task_id)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason="non_json_payload",
+            )
             self.crawler.stats.inc_value("extraction/non_json_payload")
             return
 
         items = extract_yatra_fare_items(payload, task)
         if not items:
             logger.warning("yatra: task %s — zero fares extracted from payload", task.task_id)
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason="zero_items_extracted",
+            )
             self.crawler.stats.inc_value("extraction/zero_items")
             return
 
@@ -291,5 +325,10 @@ class YatraFareSpider(scrapy.Spider):
     def handle_error(self, failure):
         task = failure.request.meta.get("task")
         logger.error("yatra: task %s failed: %s", getattr(task, "task_id", "?"), failure.value)
+        if task is not None:
+            self.missing_data.flag(
+                key=task.route_id, task_id=task.task_id, source_name=self.source_name,
+                reason=f"request_failed:{type(failure.value).__name__}",
+            )
         if getattr(self, "crawler", None) is not None:
             self.crawler.stats.inc_value("requests/failed")

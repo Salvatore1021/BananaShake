@@ -5,3 +5,8 @@ playwright-stealth>=2.0.3,<3
 Protego>=0.6,<0.7
 SQLAlchemy>=2.0,<3
 requests>=2.34,<3
+
+# Optional: live-updated User-Agent pool for compliance.get_random_user_agent().
+# compliance.py falls back to its static, curated USER_AGENT_POOL if this
+# isn't installed or its dataset can't be reached, so it's not required.
+fake-useragent>=2.2,<3

@@ -42,7 +42,7 @@ class BuildRealisticHeadersTests(unittest.TestCase):
 
     def test_chromium_family_ua_gets_sec_ch_ua_headers(self):
         chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        with unittest.mock.patch("apixproj.spiders.ota_yatra_spider.random.choice", return_value=chrome_ua):
+        with unittest.mock.patch("apixproj.spiders.ota_yatra_spider.get_random_user_agent", return_value=chrome_ua):
             headers = build_realistic_headers(referer="https://www.yatra.com/")
         self.assertEqual(headers["User-Agent"], chrome_ua)
         self.assertIn("Sec-Ch-Ua", headers)
@@ -51,7 +51,7 @@ class BuildRealisticHeadersTests(unittest.TestCase):
 
     def test_firefox_ua_gets_no_sec_ch_ua_headers(self):
         firefox_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
-        with unittest.mock.patch("apixproj.spiders.ota_yatra_spider.random.choice", return_value=firefox_ua):
+        with unittest.mock.patch("apixproj.spiders.ota_yatra_spider.get_random_user_agent", return_value=firefox_ua):
             headers = build_realistic_headers(referer="https://www.yatra.com/")
         self.assertNotIn("Sec-Ch-Ua", headers)
 

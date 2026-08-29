@@ -45,13 +45,64 @@ from protego import Protego
 logger = logging.getLogger("apix.ingestion.compliance")
 
 DEFAULT_USER_AGENT = "APIxBot/0.1 (+https://mospi.gov.in/apix-project; statistical-research)"
+
+# Curated pool of modern desktop Chrome/Safari/Edge/Firefox UA strings, used
+# as-is when `fake-useragent` isn't installed or its (network-backed) live
+# dataset can't be reached, and as the last-resort fallback if it raises at
+# runtime — see get_random_user_agent() below. Kept internally consistent
+# (real Chrome/Safari/Firefox version numbers that actually shipped together
+# with their platform strings) since a UA that doesn't match any browser
+# that ever existed is itself a fingerprinting tell.
 USER_AGENT_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.2478.80",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 ]
+
+# fake-useragent is an OPTIONAL enhancement: a live-updated pool pulled from
+# real browser market-share data, refreshed without a code change. It's not
+# a hard dependency — its dataset fetch needs network access, and the
+# library itself catches that failure and substitutes its own bundled
+# fallback string rather than raising, so this project treats it purely as
+# "better rotation when available," never as something request-critical
+# code should assume succeeded.
+try:
+    from fake_useragent import UserAgent as _FakeUserAgent
+except ImportError:  # pragma: no cover - exercised via the static-pool fallback path
+    _FakeUserAgent = None
+
+_fake_ua_instance = None
+_fake_ua_unavailable = _FakeUserAgent is None
+
+
+def _get_fake_ua_instance():
+    """Lazily construct (and cache) the fake-useragent instance, restricted
+    to modern desktop Chrome/Safari — matching this project's declared
+    User-Agent family so nothing here claims to be a browser the rest of
+    the request's headers (Sec-Ch-Ua etc.) don't back up. Returns None if
+    the library isn't installed or fails to construct, so callers always
+    have a safe fallback path."""
+    global _fake_ua_instance, _fake_ua_unavailable
+    if _fake_ua_unavailable:
+        return None
+    if _fake_ua_instance is None:
+        try:
+            _fake_ua_instance = _FakeUserAgent(
+                browsers=["Chrome", "Safari"], os=["Windows", "Mac OS X"], platforms=["desktop"],
+            )
+        except Exception as exc:  # noqa: BLE001 — any construction failure just disables the enhancement
+            logger.warning(
+                "compliance: fake-useragent unavailable (%s) — using the static USER_AGENT_POOL instead",
+                exc,
+            )
+            _fake_ua_unavailable = True
+            return None
+    return _fake_ua_instance
 PROXY_POOL = [
     p for p in [
         os.getenv("OTA_PROXY"),
@@ -66,6 +117,19 @@ FALLBACK_POLITENESS_DELAY_S = 3.0  # used when robots.txt has no Crawl-delay and
 
 
 def get_random_user_agent() -> str:
+    """A random modern desktop Chrome/Safari User-Agent string. Prefers
+    fake-useragent's live-updated pool when it's installed and working;
+    falls back to the static, hand-verified USER_AGENT_POOL otherwise (no
+    installed library, no network for its dataset, or any runtime error) —
+    this function always returns a usable string, never raises."""
+    fake_ua = _get_fake_ua_instance()
+    if fake_ua is not None:
+        try:
+            candidate = fake_ua.random
+            if candidate:
+                return candidate
+        except Exception as exc:  # noqa: BLE001 — fall through to the static pool
+            logger.warning("compliance: fake-useragent lookup failed (%s) — using the static pool", exc)
     return random.choice(USER_AGENT_POOL)
 
 
