@@ -10,3 +10,12 @@ requests>=2.34,<3
 # compliance.py falls back to its static, curated USER_AGENT_POOL if this
 # isn't installed or its dataset can't be reached, so it's not required.
 fake-useragent>=2.2,<3
+
+# --- Persistence (Postgres storage layer) ---
+psycopg[binary]>=3.2,<4
+alembic>=1.13,<2
+pydantic-settings>=2.4,<3
+
+# --- API (FastAPI + dashboard) ---
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1

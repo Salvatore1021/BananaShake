@@ -26,6 +26,7 @@ real signal (missing coverage), not a bug to paper over.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
@@ -80,6 +81,13 @@ def render_coverage_matrix(items: list[dict]) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="APIx full route x AP-window scrape runner")
+    parser.add_argument(
+        "--skip-db", action="store_true",
+        help="write JSON/CSV only; skip loading the batch into Postgres",
+    )
+    args = parser.parse_args()
+
     items, missing_summary = asyncio.run(run_batch())
 
     with open(OUTPUT_JSON_PATH, "w", encoding="utf-8") as f:
@@ -88,6 +96,22 @@ def main() -> int:
 
     print()
     print(f"Saved {len(items)} raw fare quote(s) to {OUTPUT_JSON_PATH} and {OUTPUT_CSV_PATH}")
+
+    if not args.skip_db and items:
+        from app.db.loader import load_raw_fare_items
+
+        try:
+            inserted = load_raw_fare_items(items)
+            skipped = len(items) - inserted
+            print(
+                f"Loaded {inserted} new fare observation(s) into Postgres"
+                + (f" ({skipped} already present, skipped)." if skipped else ".")
+            )
+        except Exception as exc:
+            print(
+                f"WARNING: Postgres load failed ({exc}); the JSON/CSV output above is still valid.",
+                file=sys.stderr,
+            )
     print()
     print("Coverage (quotes collected per route x AP-window):")
     print(render_coverage_matrix(items))

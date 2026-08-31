@@ -1,0 +1,16 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Scrapy
+.scrapy/
+
+# IDE
+.vscode/
+.idea/
