@@ -19,3 +19,6 @@ pydantic-settings>=2.4,<3
 # --- API (FastAPI + dashboard) ---
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
+
+# --- Scheduling (daily unattended scrape) ---
+APScheduler>=3.10,<4

@@ -196,10 +196,16 @@ def _parse_journey(journey: dict, fares_by_key: dict, task: SearchTask) -> list[
         fare_list = fare_detail.get("fares") or []
         if not fare_list:
             continue
-        passenger_fares = fare_list[0].get("passengerFares") or []
+        selected_fare = fare_list[0]
+        passenger_fares = selected_fare.get("passengerFares") or []
         if not passenger_fares:
             continue
         pf = passenger_fares[0]
+        # "EC"/"NB"/"LB"/"AV" etc. — the fare-bucket code for the one fare
+        # option kept per journey (see the loop-break note below); falls
+        # back to classOfService (the underlying booking/RBD code, e.g.
+        # "R0") on the rare payload that carries one but not the other.
+        fare_class = selected_fare.get("productClass") or selected_fare.get("classOfService")
 
         total_fare = _to_optional_float(pf.get("fareAmount"))
         base_fare = _to_optional_float(pf.get("discountedFare"))
@@ -223,6 +229,7 @@ def _parse_journey(journey: dict, fares_by_key: dict, task: SearchTask) -> list[
                 taxes_and_fees=taxes_and_fees,
                 total_fare=total_fare,
                 seats_left=seats_left,
+                fare_class=fare_class,
                 lead_window=task.advance_purchase_window,
                 source_name=SOURCE_NAME,
                 source_type=SOURCE_TYPE,

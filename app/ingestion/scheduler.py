@@ -19,7 +19,18 @@ Route basket and advance-purchase windows are the two axes of the matrix:
                          route at: T+1, T+7, T+15, T+30, T+45.
 
 The full matrix for one run date is len(ROUTE_PAIRS) * len(AP_WINDOWS_DAYS)
-tasks (6 x 5 = 30 today).
+tasks (20 x 5 = 100 today).
+
+ROUTE_PAIRS covers both directions of 10 major Akasa-served metro city
+pairs (the original 6 plus DEL-HYD, BOM-HYD, DEL-PNQ and BOM-GOI) rather
+than one direction each, because a route's outbound and return fares are
+priced independently by the carrier and are not mirror images of each
+other -- collapsing them to one direction would silently halve the index's
+real route coverage. Both this and AP_WINDOWS_DAYS stay swappable via
+generate_route_date_matrix()'s own routes/ap_windows parameters (and
+RouteDateMatrixScheduler's constructor) for a one-off custom basket -- see
+test_custom_routes_and_windows_are_respected / the scheduler-level
+equivalent.
 """
 
 from __future__ import annotations
@@ -56,14 +67,35 @@ class RoutePair:
         return f"{self.origin}-{self.destination}"
 
 
-# The six city pairs required by the ingestion spec.
+# Ten major metro city pairs, both directions -- 20 routes total. The
+# original six plus four more high-traffic Akasa-served pairs (DEL-HYD,
+# BOM-HYD, DEL-PNQ, BOM-GOX), each searched outbound and return.
+#
+# Goa is coded GOX (Manohar International, Mopa) rather than the older
+# GOI (Dabolim) -- confirmed live against Akasa's own fare-search API,
+# which returns HTTP 400 for every GOI request (real flights back for
+# GOX). Akasa's Goa service runs out of the newer airport.
 ROUTE_PAIRS: tuple[RoutePair, ...] = (
     RoutePair("DEL", "BOM"),
+    RoutePair("BOM", "DEL"),
     RoutePair("DEL", "BLR"),
+    RoutePair("BLR", "DEL"),
     RoutePair("BOM", "BLR"),
+    RoutePair("BLR", "BOM"),
     RoutePair("DEL", "CCU"),
+    RoutePair("CCU", "DEL"),
     RoutePair("BLR", "HYD"),
+    RoutePair("HYD", "BLR"),
     RoutePair("MAA", "DEL"),
+    RoutePair("DEL", "MAA"),
+    RoutePair("DEL", "HYD"),
+    RoutePair("HYD", "DEL"),
+    RoutePair("BOM", "HYD"),
+    RoutePair("HYD", "BOM"),
+    RoutePair("DEL", "PNQ"),
+    RoutePair("PNQ", "DEL"),
+    RoutePair("BOM", "GOX"),
+    RoutePair("GOX", "BOM"),
 )
 
 # Advance-purchase windows: label -> lead days from the run date.

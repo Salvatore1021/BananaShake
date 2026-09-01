@@ -11,6 +11,9 @@ venv/
 # Scrapy
 .scrapy/
 
+# Daily-scrape-job log files (app/ingestion/daily_scrape_job.py)
+logs/
+
 # IDE
 .vscode/
 .idea/

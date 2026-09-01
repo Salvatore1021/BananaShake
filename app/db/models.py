@@ -131,6 +131,7 @@ class FareObservation(Base):
     taxes_and_fees: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     total_fare: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     seats_left: Mapped[int | None] = mapped_column(nullable=True)
+    fare_class: Mapped[str | None] = mapped_column(nullable=True)  # source's own fare-bucket code, e.g. "EC"
 
     lead_window: Mapped[str] = mapped_column(nullable=False)  # e.g. "T+7"
     source_name: Mapped[str] = mapped_column(nullable=False)  # e.g. "akasa_air"
@@ -146,4 +147,84 @@ class FareObservation(Base):
         return (
             f"FareObservation(route_id={self.route_id!r}, lead_window={self.lead_window!r}, "
             f"total_fare={self.total_fare!r}, scraped_at={self.scraped_at!r})"
+        )
+
+
+class ScrapeRun(Base):
+    """One row per invocation of run_daily_scrape.py — the audit trail that
+    turns "the daily job is supposed to run unattended" into something
+    observable: a dashboard health panel, or a human checking on the
+    scheduler after a week away, reads this table rather than grepping
+    rotating log files on the machine the scheduler happens to run on.
+
+    Written in two steps by run_daily_scrape.main(): one row is inserted
+    (status=RUNNING) before the batch starts, then updated in place once it
+    finishes (or crashes) — so a run that never reaches its second write
+    (e.g. the process is killed) is itself visible as a row permanently
+    stuck at RUNNING, rather than silently missing.
+    """
+
+    __tablename__ = "scrape_runs"
+    __table_args__ = (
+        Index("ix_scrape_runs_started_at", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    started_at: Mapped[datetime.datetime] = mapped_column(nullable=False)
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(nullable=False, default="running")  # running|success|partial|failed
+
+    tasks_total: Mapped[int] = mapped_column(nullable=False, default=0)
+    items_collected: Mapped[int] = mapped_column(nullable=False, default=0)
+    items_loaded: Mapped[int] = mapped_column(nullable=False, default=0)
+    missing_data_summary: Mapped[str | None] = mapped_column(nullable=True)  # JSON-encoded {reason: count}
+    error_message: Mapped[str | None] = mapped_column(nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return (
+            f"ScrapeRun(id={self.id!r}, status={self.status!r}, "
+            f"started_at={self.started_at!r}, items_loaded={self.items_loaded!r})"
+        )
+
+
+class FareIndexDaily(Base):
+    """One row per (index_date, lead_window) — the daily Airfare Price
+    Index value computed by app/index/psd_index.py, persisted here so the
+    dashboard/API reads a precomputed series instead of re-running the
+    weighted-index calculation on every request.
+
+    lead_window holds either a real AP-window label ("T+7") or the sentinel
+    app.index.psd_index.OVERALL_LABEL for the one blended row per date
+    (equal-weighted across whichever AP windows have data that day) —
+    deliberately a string sentinel and NOT SQL NULL: Postgres's UNIQUE
+    constraint (and therefore ON CONFLICT) never treats two NULLs as equal,
+    so a nullable lead_window would let every recompute silently INSERT a
+    fresh "overall" row instead of updating the existing one, defeating
+    the whole point of upserting on (index_date, lead_window) — caught by
+    tests/test_psd_index.py's idempotency test before it ever shipped.
+    """
+
+    __tablename__ = "fare_index_daily"
+    __table_args__ = (
+        UniqueConstraint("index_date", "lead_window", name="uq_fare_index_daily_date_window"),
+        Index("ix_fare_index_daily_index_date", "index_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    index_date: Mapped[datetime.date] = mapped_column(nullable=False)
+    lead_window: Mapped[str] = mapped_column(nullable=False)  # AP window label, or OVERALL_LABEL
+    index_value: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    base_date: Mapped[datetime.date] = mapped_column(nullable=False)
+    route_count: Mapped[int] = mapped_column(nullable=False)  # routes actually contributing this row
+
+    computed_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return (
+            f"FareIndexDaily(index_date={self.index_date!r}, lead_window={self.lead_window!r}, "
+            f"index_value={self.index_value!r})"
         )

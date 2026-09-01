@@ -44,6 +44,7 @@ def list_fares(
     route_id: str | None = Query(None, description="e.g. DEL-BOM"),
     carrier_code: str | None = Query(None, description="e.g. QP"),
     lead_window: str | None = Query(None, description="e.g. T+7"),
+    fare_class: str | None = Query(None, description="source's own fare-bucket code, e.g. EC"),
     source_name: str | None = None,
     scraped_from: datetime.datetime | None = Query(None, description="scraped_at lower bound, inclusive"),
     scraped_to: datetime.datetime | None = Query(None, description="scraped_at upper bound, inclusive"),
@@ -59,6 +60,8 @@ def list_fares(
         stmt = stmt.where(FareObservation.carrier_code == carrier_code)
     if lead_window is not None:
         stmt = stmt.where(FareObservation.lead_window == lead_window)
+    if fare_class is not None:
+        stmt = stmt.where(FareObservation.fare_class == fare_class)
     if source_name is not None:
         stmt = stmt.where(FareObservation.source_name == source_name)
     if scraped_from is not None:

@@ -139,8 +139,24 @@ class ParseFareSearchResponseTests(unittest.TestCase):
         self.assertEqual(item["taxes_and_fees"], 1780.0)
         self.assertEqual(item["total_fare"], 9717.0)
         self.assertEqual(item["seats_left"], 7)
+        self.assertEqual(item["fare_class"], "EC")
         self.assertEqual(item["source_name"], "akasa_air")
         self.assertEqual(item["source_type"], "airline_direct")
+
+    def test_fare_class_falls_back_to_class_of_service_when_product_class_missing(self):
+        payload = make_real_shaped_payload()
+        fare = payload["data"]["faresAvailable"][0]["value"]["fares"][0]
+        del fare["productClass"]
+        items = parse_fare_search_response(payload, make_task())
+        self.assertEqual(items[0]["fare_class"], "R0")
+
+    def test_fare_class_is_none_when_neither_field_present(self):
+        payload = make_real_shaped_payload()
+        fare = payload["data"]["faresAvailable"][0]["value"]["fares"][0]
+        del fare["productClass"]
+        del fare["classOfService"]
+        items = parse_fare_search_response(payload, make_task())
+        self.assertIsNone(items[0]["fare_class"])
 
     def test_base_fare_plus_taxes_equals_total(self):
         items = parse_fare_search_response(make_real_shaped_payload(), make_task())

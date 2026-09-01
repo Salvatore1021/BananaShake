@@ -34,6 +34,7 @@ RAW_FARE_ITEM_FIELDS = (
     "taxes_and_fees",
     "total_fare",
     "seats_left",
+    "fare_class",
     "scraped_at_timestamp",
     "lead_window",
     "source_name",
@@ -58,9 +59,18 @@ def build_raw_fare_item(
     lead_window: str,
     source_name: str,
     source_type: str,
+    fare_class: str | None = None,
     scraped_at: datetime | None = None,
 ) -> dict:
     """Build one raw fare item dict in the canonical shape.
+
+    `fare_class` is the source's own fare-bucket/product-class code for
+    this quote (e.g. Akasa's "EC" — see akasa_air_spider.py's
+    _parse_journey), passed through as-is rather than decoded into a
+    human label, since no source in this project documents what its codes
+    mean beyond what's directly observable in a captured response.
+    Optional (defaults to None) because not every source is guaranteed to
+    expose it.
 
     `scraped_at` is injectable (defaults to `datetime.now(timezone.utc)`)
     purely so callers can get a deterministic `scraped_at_timestamp` in
@@ -79,6 +89,7 @@ def build_raw_fare_item(
         "taxes_and_fees": taxes_and_fees,
         "total_fare": total_fare,
         "seats_left": seats_left,
+        "fare_class": fare_class,
         "scraped_at_timestamp": timestamp.isoformat(),
         "lead_window": lead_window,
         "source_name": source_name,

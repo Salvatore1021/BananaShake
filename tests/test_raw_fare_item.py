@@ -67,6 +67,24 @@ class BuildRawFareItemTests(unittest.TestCase):
         self.assertEqual(item["source_name"], "yatra")
         self.assertEqual(item["source_type"], "ota")
 
+    def test_fare_class_defaults_to_none_when_omitted(self):
+        item = build_raw_fare_item(
+            flight_number=None, airline_name=None, carrier_code=None,
+            origin="DEL", destination="BOM", departure_time=None, arrival_time=None,
+            base_fare=None, taxes_and_fees=None, total_fare=None, seats_left=None,
+            lead_window="T+1", source_name="x", source_type="ota",
+        )
+        self.assertIsNone(item["fare_class"])
+
+    def test_fare_class_passes_through_when_given(self):
+        item = build_raw_fare_item(
+            flight_number=None, airline_name=None, carrier_code=None,
+            origin="DEL", destination="BOM", departure_time=None, arrival_time=None,
+            base_fare=None, taxes_and_fees=None, total_fare=None, seats_left=None,
+            lead_window="T+1", source_name="x", source_type="ota", fare_class="EC",
+        )
+        self.assertEqual(item["fare_class"], "EC")
+
 
 if __name__ == "__main__":
     unittest.main()

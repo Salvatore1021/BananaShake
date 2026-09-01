@@ -102,6 +102,7 @@ def load_raw_fare_items(items: list[dict], session: Session | None = None) -> in
                 "taxes_and_fees": _parse_decimal(item.get("taxes_and_fees")),
                 "total_fare": _parse_decimal(item.get("total_fare")),
                 "seats_left": item.get("seats_left"),
+                "fare_class": item.get("fare_class"),
                 "lead_window": item["lead_window"],
                 "source_name": item["source_name"],
                 "source_type": item["source_type"],

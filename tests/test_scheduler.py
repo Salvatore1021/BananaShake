@@ -27,15 +27,32 @@ FIXED_RUN_DATE = date(2026, 8, 29)  # arbitrary fixed anchor for determinism
 class RoutePairTests(unittest.TestCase):
     def test_required_city_pairs_are_present(self):
         expected = {
-            ("DEL", "BOM"),
-            ("DEL", "BLR"),
-            ("BOM", "BLR"),
-            ("DEL", "CCU"),
-            ("BLR", "HYD"),
-            ("MAA", "DEL"),
+            ("DEL", "BOM"), ("BOM", "DEL"),
+            ("DEL", "BLR"), ("BLR", "DEL"),
+            ("BOM", "BLR"), ("BLR", "BOM"),
+            ("DEL", "CCU"), ("CCU", "DEL"),
+            ("BLR", "HYD"), ("HYD", "BLR"),
+            ("MAA", "DEL"), ("DEL", "MAA"),
+            ("DEL", "HYD"), ("HYD", "DEL"),
+            ("BOM", "HYD"), ("HYD", "BOM"),
+            ("DEL", "PNQ"), ("PNQ", "DEL"),
+            ("BOM", "GOX"), ("GOX", "BOM"),
         }
         actual = {(r.origin, r.destination) for r in ROUTE_PAIRS}
         self.assertEqual(actual, expected)
+
+    def test_every_city_pair_covers_both_directions(self):
+        """Each undirected city pair in the basket must appear as both
+        directed routes -- outbound and return fares are priced
+        independently by the carrier, so a one-direction basket would
+        silently discard half the real route coverage (see module
+        docstring)."""
+        pairs = {(r.origin, r.destination) for r in ROUTE_PAIRS}
+        for origin, destination in pairs:
+            self.assertIn(
+                (destination, origin), pairs,
+                f"{origin}-{destination} has no return-direction counterpart",
+            )
 
     def test_route_pairs_are_unique(self):
         route_ids = [r.route_id for r in ROUTE_PAIRS]

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APIx — Airfare Price Index</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230F6F5C'/%3E%3Ctext x='50' y='68' font-size='58' font-family='Georgia,serif' fill='%23F4F6F6' text-anchor='middle'%3E%E2%9C%88%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">✈</span>
+      <div class="brand-text">
+        <span class="brand-name">APIx</span>
+        <span class="brand-tagline">Airfare Price Index — Akasa Air</span>
+      </div>
+    </div>
+    <div id="freshness" class="freshness pill pill--muted">
+      <span class="pill-dot"></span>
+      <span id="freshness-label">checking data freshness…</span>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- KPI strip -->
+  <section class="kpi-strip" aria-label="Key figures">
+    <div class="kpi kpi--hero">
+      <span class="kpi-label">Overall index, today</span>
+      <div class="kpi-hero-row">
+        <span id="kpi-index-value" class="kpi-hero-value">—</span>
+        <span id="kpi-index-delta" class="kpi-delta"></span>
+      </div>
+      <span class="kpi-note">Base = 100 on each route's first tracked day</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Fare quotes collected</span>
+      <span id="kpi-observations" class="kpi-value">—</span>
+      <span class="kpi-note" id="kpi-observations-note">&nbsp;</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Routes tracked</span>
+      <span id="kpi-routes" class="kpi-value">—</span>
+      <span class="kpi-note">of 20 in the daily basket</span>
+    </div>
+    <div class="kpi kpi--progress">
+      <span class="kpi-label">Days toward 30-day back-test</span>
+      <span id="kpi-days" class="kpi-value">—</span>
+      <div class="progress-track"><div id="progress-fill" class="progress-fill" style="width:0%"></div></div>
+    </div>
+  </section>
+
+  <!-- Index chart -->
+  <section class="panel" aria-label="Index over time">
+    <div class="panel-head">
+      <h2>Daily index</h2>
+      <div class="window-toggle" id="window-toggle" role="tablist" aria-label="Advance-purchase window">
+        <button type="button" class="toggle-btn is-active" data-window="OVERALL" role="tab" aria-selected="true">Overall</button>
+        <button type="button" class="toggle-btn" data-window="T+1" role="tab" aria-selected="false">T+1</button>
+        <button type="button" class="toggle-btn" data-window="T+7" role="tab" aria-selected="false">T+7</button>
+        <button type="button" class="toggle-btn" data-window="T+15" role="tab" aria-selected="false">T+15</button>
+        <button type="button" class="toggle-btn" data-window="T+30" role="tab" aria-selected="false">T+30</button>
+        <button type="button" class="toggle-btn" data-window="T+45" role="tab" aria-selected="false">T+45</button>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="index-chart" height="110"></canvas>
+      <div id="chart-empty" class="chart-empty" hidden>No index data yet for this window.</div>
+    </div>
+    <p id="chart-baseline-note" class="panel-note" hidden>Only one day of data so far — every series reads exactly 100 today by construction. This line will start showing real movement from day two onward.</p>
+  </section>
+
+  <div class="grid-two">
+    <!-- Route table -->
+    <section class="panel" aria-label="Fares by route">
+      <div class="panel-head">
+        <h2>Average fare by route</h2>
+        <span class="panel-head-note">most recent day, per AP window</span>
+      </div>
+      <div class="table-wrap">
+        <table id="route-table" class="route-table">
+          <thead>
+            <tr>
+              <th scope="col">Route</th>
+              <th scope="col">T+1</th>
+              <th scope="col">T+7</th>
+              <th scope="col">T+15</th>
+              <th scope="col">T+30</th>
+              <th scope="col">T+45</th>
+            </tr>
+          </thead>
+          <tbody id="route-table-body">
+            <tr><td colspan="6" class="table-loading">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Pipeline health -->
+    <section class="panel" aria-label="Pipeline health">
+      <div class="panel-head">
+        <h2>Scrape runs</h2>
+        <span class="panel-head-note">most recent first</span>
+      </div>
+      <ul id="run-list" class="run-list">
+        <li class="run-loading">Loading…</li>
+      </ul>
+    </section>
+  </div>
+
+</main>
+
+<footer class="site-footer">
+  <p>Tracking Akasa Air only, by design — see project scope. Index is a weighted price-relative across the daily route basket, not an official statistic.
+  <a href="/docs" target="_blank" rel="noopener">API reference ↗</a></p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
