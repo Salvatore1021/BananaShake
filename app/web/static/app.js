@@ -250,11 +250,20 @@ function wireWindowToggle() {
   });
 }
 
-/* ---------------- Init ---------------- */
+/* ---------------- Init + auto-refresh ---------------- */
 
-async function init() {
-  wireWindowToggle();
+// The daily job can finish loading new rows while a dashboard tab is
+// already open — poll for that instead of leaving the tab showing
+// whatever was current at page-load until someone manually reloads.
+const REFRESH_INTERVAL_MS = 30_000;
+let latestKnownRunSignature = null;
 
+function activeWindowLabel() {
+  const active = document.querySelector("#window-toggle .toggle-btn.is-active");
+  return active ? active.dataset.window : "OVERALL";
+}
+
+async function loadData() {
   const [runs, indexRows, summaryRows, routes] = await Promise.all([
     fetchJSON("/scrape-runs?limit=10").catch(() => []),
     fetchJSON("/index/daily").catch(() => []),
@@ -265,17 +274,40 @@ async function init() {
   renderFreshness(runs);
   renderRunList(runs);
 
+  indexRowsByWindow = { OVERALL: [] };
+  for (const w of AP_WINDOWS) indexRowsByWindow[w] = [];
   for (const row of indexRows) {
     const key = row.lead_window === "OVERALL" ? "OVERALL" : row.lead_window;
     if (!indexRowsByWindow[key]) indexRowsByWindow[key] = [];
     indexRowsByWindow[key].push(row);
   }
   renderIndexKpi(indexRowsByWindow.OVERALL);
-  drawChart("OVERALL");
+  drawChart(activeWindowLabel());
 
   renderVolumeKpis(summaryRows);
   renderRoutesKpi(routes);
   renderRouteTable(summaryRows);
+
+  latestKnownRunSignature = runs[0] ? `${runs[0].id}:${runs[0].status}:${runs[0].finished_at}` : null;
+}
+
+async function pollForUpdates() {
+  try {
+    const runs = await fetchJSON("/scrape-runs?limit=1");
+    const signature = runs[0] ? `${runs[0].id}:${runs[0].status}:${runs[0].finished_at}` : null;
+    if (signature !== latestKnownRunSignature) {
+      await loadData();
+    }
+  } catch {
+    // Transient fetch failure — leave the dashboard showing its last good
+    // state and just try again on the next tick.
+  }
+}
+
+async function init() {
+  wireWindowToggle();
+  await loadData();
+  setInterval(pollForUpdates, REFRESH_INTERVAL_MS);
 }
 
 init().catch((err) => {

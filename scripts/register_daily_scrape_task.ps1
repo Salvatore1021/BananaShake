@@ -18,12 +18,20 @@
     (and to see the history of, via Get-ScheduledTaskInfo /
     `schtasks /query`) than one that has to stay alive for weeks.
 
-    Runs under the current user account (no stored password needed), so
-    the task fires as scheduled on any day this user is logged in --
-    including after a reboot, as long as they've signed back in by the
-    scheduled time. That covers the actual failure mode a terminal-window
-    approach doesn't: someone closing the window, or the machine
-    restarting for Windows Update, no longer silently ends the daily job.
+    Runs under the current user account via an S4U logon (no stored
+    password needed) so the task fires at 03:00 whether or not anyone is
+    actually logged in interactively at that moment -- a plain Interactive
+    logon type (Register-ScheduledTask's default when no -Principal is
+    given) silently skips the trigger unless the user is signed in right
+    then, which on a laptop that's normally logged out or locked overnight
+    means the "daily" job effectively never fires on its own.
+
+    Also sets WakeToRun so Windows wakes the machine from sleep to run it
+    -- without this, a laptop that's asleep at 03:00 (the default on most
+    power plans) never gets the chance to run the task at all, regardless
+    of logon type -- and allows the task to start and keep running on
+    battery power, since a personal laptop isn't guaranteed to be plugged
+    in overnight.
 
 .PARAMETER Hour
     Hour (0-23, local time) to run at. Default 3 (03:00), matching
@@ -75,8 +83,19 @@ $Action = New-ScheduledTaskAction `
 
 $Trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($Hour).AddMinutes($Minute))
 
+# S4U: runs headlessly as this user without needing a stored password --
+# unlike the Interactive logon type Register-ScheduledTask defaults to,
+# it doesn't require an active interactive session at trigger time.
+$Principal = New-ScheduledTaskPrincipal `
+    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -LogonType S4U `
+    -RunLevel Limited
+
 $Settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
+    -WakeToRun `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 10) `
     -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
@@ -88,7 +107,7 @@ Register-ScheduledTask `
     -Action $Action `
     -Trigger $Trigger `
     -Settings $Settings `
-    -RunLevel Limited `
+    -Principal $Principal `
     -Description "Runs APIx's full route x AP-window Akasa Air fare scrape once daily (see app/ingestion/scheduler.py for the basket). Output logged to $TaskLog." `
     -Force | Out-Null
 
