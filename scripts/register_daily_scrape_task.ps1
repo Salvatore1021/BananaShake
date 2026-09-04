@@ -67,9 +67,34 @@ if (-not (Test-Path $ScriptPath)) {
 }
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-$PythonExe = (python -c "import sys; print(sys.executable)").Trim()
-if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
-    throw "Could not resolve a python.exe on PATH. Activate the project's Python environment first."
+$VenvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+    # Prefer the project venv over whatever "python" resolves to on PATH.
+    # On this machine (and likely many Windows dev setups) PATH resolves to
+    # the Microsoft Store / winget "PythonSoftwareFoundation.Python.3.12"
+    # package under WindowsApps -- an AppX-packaged executable. AppX
+    # packages generally refuse to launch outside an interactive user
+    # session, which is exactly what an S4U-logon scheduled task is: the
+    # very first S4U run of this task failed with a bare "Access is
+    # denied" in the task log for this reason, even though the identical
+    # `python run_daily_scrape.py` command worked fine run by hand in a
+    # terminal. A venv's python.exe is a plain copied binary, not an AppX
+    # reparse point, so it launches fine under S4U.
+    $PythonExe = $VenvPython
+} else {
+    $PythonExe = (python -c "import sys; print(sys.executable)").Trim()
+    if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
+        throw "Could not resolve a python.exe on PATH. Activate the project's Python environment first."
+    }
+    if ($PythonExe -like "*\WindowsApps\*") {
+        Write-Warning (
+            "Resolved python.exe is a Microsoft Store / WindowsApps package ($PythonExe). " +
+            "These typically fail to launch under this task's S4U logon (non-interactive) with " +
+            "'Access is denied', even though they run fine interactively. Strongly prefer creating " +
+            "a project venv first (python -m venv venv; venv\Scripts\pip install -r requirements.txt) " +
+            "and re-running this script, which will then use venv\Scripts\python.exe instead."
+        )
+    }
 }
 
 $TaskLog = Join-Path $LogDir "scheduled_task.log"

@@ -1,19 +1,27 @@
 :root {
-  --ink: #101820;
-  --ink-soft: #4E5D6C;
-  --ink-faint: #7C8993;
-  --paper: #F4F6F6;
-  --surface: #FFFFFF;
+  /* Neutral chrome desaturated to a true-gray family anchored on --paper
+     (#E6E6E5) -- the previous set (#101820 / #E1E6E5 / ...) all carried a
+     faint cool teal-blue cast picked up from the accent color; matching
+     the whole theme to a plain neutral gray meant removing that tint
+     rather than just swapping one token. Accent/status colors are left
+     alone deliberately -- they carry meaning (success/warning/failure),
+     not just decoration, so flattening them to gray would cost real
+     legibility for no visual gain. */
+  --ink: #1A1A1A;
+  --ink-soft: #57585B;
+  --ink-faint: #86878A;
+  --paper: #060F26;
+  --surface: #F5F5F4;
   --surface-raised: #FFFFFF;
-  --line: #E1E6E5;
-  --line-strong: #CBD3D2;
+  --line: #D4D4D3;
+  --line-strong: #B7B7B5;
 
   --accent: #0F6F5C;
   --accent-ink: #0B5445;
   --accent-soft: #DCEEEA;
 
-  --amber: #C97F0E;
-  --amber-soft: #F7E8D2;
+  --maroon: #5E1B1B; /* day-tracker progress fill */
+  --light-blue: #DCEAF8; /* masthead background */
 
   --up: #B23B3B;
   --up-soft: #F5E1DF;
@@ -33,44 +41,14 @@
   --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
 
-  --shadow-card: 0 1px 2px rgba(16, 24, 32, 0.04), 0 6px 16px -8px rgba(16, 24, 32, 0.10);
+  --shadow-card: 0 1px 2px rgba(26, 26, 26, 0.05), 0 6px 16px -8px rgba(26, 26, 26, 0.12);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ink: #E9EDEC;
-    --ink-soft: #AEBAB8;
-    --ink-faint: #7C8993;
-    --paper: #0E1513;
-    --surface: #141D1B;
-    --surface-raised: #17211F;
-    --line: #253230;
-    --line-strong: #364543;
-
-    --accent: #4FBF9F;
-    --accent-ink: #79D6BB;
-    --accent-soft: #16332B;
-
-    --amber: #E3A94A;
-    --amber-soft: #362A15;
-
-    --up: #E08276;
-    --up-soft: #3A2220;
-    --down: #5FBF87;
-    --down-soft: #17332A;
-
-    --status-success: #5FBF87;
-    --status-success-soft: #173327;
-    --status-partial: #E3A94A;
-    --status-partial-soft: #362A15;
-    --status-failed: #E08276;
-    --status-failed-soft: #3A2220;
-    --status-running: #6FA8DC;
-    --status-running-soft: #1B2A38;
-
-    --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 8px 20px -10px rgba(0,0,0,0.5);
-  }
-}
+/* Light theme forced site-wide — no prefers-color-scheme: dark branch.
+   A separate dark palette existed here before, but per-request the page
+   now always renders light regardless of the viewer's OS/browser
+   preference, so keeping a dark block around would just be dead CSS that
+   never matches. */
 
 * { box-sizing: border-box; }
 
@@ -102,7 +80,7 @@ a { color: var(--accent-ink); }
 
 /* ---------- Masthead ---------- */
 .masthead {
-  background: var(--surface);
+  background: var(--light-blue);
   border-bottom: 1px solid var(--line);
 }
 .masthead-inner {
@@ -121,13 +99,17 @@ a { color: var(--accent-ink); }
   place-items: center;
   width: 38px; height: 38px;
   border-radius: 9px;
-  background: var(--accent);
-  color: var(--paper);
+  background: var(--maroon);
+  /* --surface-raised, not --paper: this needs to stay a light glyph
+     against the badge regardless of what the page background is set to
+     (--paper is dark now) -- reusing --paper here assumed it was always
+     light, which broke once it wasn't. */
+  color: var(--surface-raised);
   font-size: 18px;
   transform: rotate(-8deg);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
-.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 21px; letter-spacing: -0.01em; }
+.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 21px; letter-spacing: -0.01em; color: var(--maroon); }
 .brand-tagline { font-size: 12.5px; color: var(--ink-faint); }
 
 .pill {
@@ -143,7 +125,7 @@ a { color: var(--accent-ink); }
 }
 .pill-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .pill--muted { background: var(--line); color: var(--ink-soft); }
-.pill--success { background: var(--status-success-soft); color: var(--status-success); }
+.pill--success { background: var(--status-success-soft); color: var(--status-success); border: 1px solid var(--status-success); }
 .pill--partial { background: var(--status-partial-soft); color: var(--status-partial); }
 .pill--failed { background: var(--status-failed-soft); color: var(--status-failed); }
 .pill--running { background: var(--status-running-soft); color: var(--status-running); }
@@ -161,11 +143,46 @@ a { color: var(--accent-ink); }
 /* ---------- KPI strip ---------- */
 .kpi-strip {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 1fr 1.2fr;
+  /* Hero (index value + the now-nowrap delta badge) needs more room than
+     the other three, which are just a label + a short value/bar -- was
+     1.6fr 1fr 1fr 1.2fr, too even for how much wider the hero's content
+     actually is. */
+  grid-template-columns: 2fr 0.8fr 0.8fr 1fr;
   gap: 14px;
+  position: relative;
+  z-index: 1; /* below .panel--chart, so the reveal below looks like it emerges from behind it */
 }
 @media (max-width: 860px) { .kpi-strip { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 520px) { .kpi-strip { grid-template-columns: 1fr; } }
+
+/* On load, the KPI cards start pushed down into the chart panel's box
+   (behind it, since .panel--chart sits at a higher z-index) and slide up
+   into their resting place one after another, not all at once — app.js
+   adds .is-revealed the same instant it calls drawChart(). Each card's
+   own transition-delay + transition-duration is chosen so the LAST card
+   (4th) lands exactly when the chart's own line-draw finishes:
+   STAGGER (120ms) * 3 + DURATION (740ms) = 1100ms = KPI_REVEAL_MS in
+   app.js — the two numbers that constant drives (Chart.js's
+   animation.duration, and this 4th-card total) have to stay in sync by
+   hand since CSS can't read a JS constant; change one, change both.
+   Skipped entirely on repeat (poll-triggered) refreshes, and on
+   prefers-reduced-motion, both handled in app.js/below. */
+.kpi-strip .kpi {
+  transform: translateY(115%);
+  opacity: 0;
+  transition: transform 740ms cubic-bezier(0.16, 1, 0.3, 1), opacity 740ms ease-out;
+}
+.kpi-strip .kpi:nth-child(1) { transition-delay: 0ms; }
+.kpi-strip .kpi:nth-child(2) { transition-delay: 120ms; }
+.kpi-strip .kpi:nth-child(3) { transition-delay: 240ms; }
+.kpi-strip .kpi:nth-child(4) { transition-delay: 360ms; } /* 360 + 740 = 1100 = KPI_REVEAL_MS */
+.kpi-strip.is-revealed .kpi {
+  transform: translateY(0);
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi-strip .kpi { transition: none; transform: none; opacity: 1; }
+}
 
 .kpi {
   background: var(--surface);
@@ -194,7 +211,7 @@ a { color: var(--accent-ink); }
 .kpi-note { font-size: 12px; color: var(--ink-faint); }
 
 .kpi--hero { background: linear-gradient(155deg, var(--surface) 55%, var(--accent-soft) 150%); }
-.kpi-hero-row { display: flex; align-items: baseline; gap: 12px; }
+.kpi-hero-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap; }
 .kpi-hero-value {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -209,6 +226,7 @@ a { color: var(--accent-ink); }
   font-weight: 600;
   padding: 3px 9px;
   border-radius: 7px;
+  white-space: nowrap; /* "▲ 0.9% vs prior day" was wrapping onto two lines in the cramped hero column */
 }
 .kpi-delta.is-up { color: var(--up); background: var(--up-soft); }
 .kpi-delta.is-down { color: var(--down); background: var(--down-soft); }
@@ -223,7 +241,7 @@ a { color: var(--accent-ink); }
 }
 .progress-fill {
   height: 100%;
-  background: var(--amber);
+  background: var(--maroon);
   border-radius: 4px;
   transition: width 0.4s ease;
 }
@@ -236,6 +254,11 @@ a { color: var(--accent-ink); }
   padding: 20px 22px 22px;
   box-shadow: var(--shadow-card);
 }
+/* Needs its own stacking context above .kpi-strip (z-index: 1) so the KPI
+   cards' on-load reveal (see .kpi-strip .kpi) is actually occluded by this
+   panel while they're still tucked underneath it, not just visually
+   "behind" by paint order coincidence. */
+.panel--chart { position: relative; z-index: 2; }
 .panel-head {
   display: flex;
   align-items: baseline;
@@ -248,7 +271,11 @@ a { color: var(--accent-ink); }
 .panel-head-note { font-size: 12px; color: var(--ink-faint); }
 .panel-note { margin: 10px 2px 0; font-size: 12.5px; color: var(--ink-faint); }
 
-.window-toggle { display: flex; gap: 4px; background: var(--paper); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
+/* --line, not --paper: this is the toggle group's own recessed-track
+   fill, sitting inside a --surface panel -- it needs to read as a subtle
+   step darker than the panel regardless of the page background's color,
+   which --paper no longer reliably is. */
+.window-toggle { display: flex; gap: 4px; background: var(--line); border: 1px solid var(--line-strong); border-radius: 9px; padding: 3px; }
 .toggle-btn {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -260,7 +287,7 @@ a { color: var(--accent-ink); }
   cursor: pointer;
 }
 .toggle-btn:hover { color: var(--ink); }
-.toggle-btn.is-active { background: var(--accent); color: var(--paper); }
+.toggle-btn.is-active { background: var(--accent); color: var(--surface-raised); }
 .toggle-btn:focus-visible, .run-list a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .chart-wrap { position: relative; height: 300px; }
@@ -298,7 +325,16 @@ a { color: var(--accent-ink); }
   font-weight: 500;
   color: var(--ink);
 }
-.route-table tbody tr:hover { background: var(--accent-soft); }
+.route-table tbody tr {
+  transform-origin: center;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.route-table tbody tr:hover {
+  background: var(--accent-soft);
+  transform: scale(1.03);
+  position: relative; /* so z-index below actually lifts it above its un-scaled neighbors */
+  z-index: 1;
+}
 .route-table .cell-empty { color: var(--ink-faint); }
 .table-loading { text-align: center; color: var(--ink-faint); padding: 20px; font-family: var(--font-body); }
 

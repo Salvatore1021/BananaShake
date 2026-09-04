@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>APIx — Airfare Price Index</title>
+<title>FairShow — Airfare Price Index</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230F6F5C'/%3E%3Ctext x='50' y='68' font-size='58' font-family='Georgia,serif' fill='%23F4F6F6' text-anchor='middle'%3E%E2%9C%88%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,8 +17,8 @@
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">✈</span>
       <div class="brand-text">
-        <span class="brand-name">APIx</span>
-        <span class="brand-tagline">Airfare Price Index — Akasa Air</span>
+        <span class="brand-name">FairShow</span>
+        <span class="brand-tagline">Airfare Price Index</span>
       </div>
     </div>
     <div id="freshness" class="freshness pill pill--muted">
@@ -31,7 +31,7 @@
 <main class="page">
 
   <!-- KPI strip -->
-  <section class="kpi-strip" aria-label="Key figures">
+  <section class="kpi-strip" id="kpi-strip" aria-label="Key figures">
     <div class="kpi kpi--hero">
       <span class="kpi-label">Overall index, today</span>
       <div class="kpi-hero-row">
@@ -58,7 +58,7 @@
   </section>
 
   <!-- Index chart -->
-  <section class="panel" aria-label="Index over time">
+  <section class="panel panel--chart" aria-label="Index over time">
     <div class="panel-head">
       <h2>Daily index</h2>
       <div class="window-toggle" id="window-toggle" role="tablist" aria-label="Advance-purchase window">
@@ -75,6 +75,7 @@
       <div id="chart-empty" class="chart-empty" hidden>No index data yet for this window.</div>
     </div>
     <p id="chart-baseline-note" class="panel-note" hidden>Only one day of data so far — every series reads exactly 100 today by construction. This line will start showing real movement from day two onward.</p>
+    <p id="chart-outlier-note" class="panel-note" hidden>▲ Triangle = statistical outlier (festival/weekend spike, etc.) — pinned to the chart's edge so it doesn't stretch the y-axis for every other day; hover it for the real value.</p>
   </section>
 
   <div class="grid-two">

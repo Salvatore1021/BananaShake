@@ -7,6 +7,15 @@ const BASKET_ROUTE_COUNT = 20; // app/ingestion/scheduler.py's ROUTE_PAIRS
 const BACKTEST_TARGET_DAYS = 30; // the project's 30-day DGCA back-test requirement
 const AP_WINDOWS = ["T+1", "T+7", "T+15", "T+30", "T+45"];
 
+// Drives drawChart()'s Chart.js animation.duration directly. The KPI
+// cards stagger in one-by-one rather than all at once (see .kpi-strip
+// .kpi / :nth-child in styles.css) with the LAST card timed to land
+// exactly when this finishes -- that CSS hand-computes its own
+// delay+duration to sum to this same number, since CSS can't read a JS
+// constant. Change this, and update styles.css's comment/numbers next to
+// .kpi-strip .kpi to match.
+const KPI_REVEAL_MS = 1100;
+
 const fmtMoney = (n) =>
   n == null ? "—" : `₹${Math.round(n).toLocaleString("en-IN")}`;
 const fmtIndex = (n) => (n == null ? "—" : Number(n).toFixed(1));
@@ -32,6 +41,34 @@ function relativeTime(isoString) {
 
 function statusPillClass(status) {
   return { success: "pill--success", partial: "pill--partial", failed: "pill--failed", running: "pill--running" }[status] || "pill--muted";
+}
+
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Animates one element's text from 0 up to targetValue on every call,
+ * formatting each intermediate frame with the same formatter the final
+ * value uses (fmtIndex/fmtInt) so it never flashes an oddly-shaped number
+ * mid-count. Keyed by a per-element token rather than a shared flag so a
+ * second call (e.g. the 30s poll refresh landing while a KPI is still
+ * mid-count from the last one) cleanly supersedes the first instead of
+ * both rAF loops fighting over the same textContent. */
+function animateCountUp(el, targetValue, formatFn, durationMs = 900) {
+  if (!el) return;
+  if (prefersReducedMotion || !Number.isFinite(targetValue)) {
+    el.textContent = formatFn(targetValue);
+    return;
+  }
+  const token = (el._countUpToken = (el._countUpToken || 0) + 1);
+  const start = performance.now();
+
+  function tick(now) {
+    if (el._countUpToken !== token) return; // a newer animateCountUp call took over
+    const progress = Math.min(1, (now - start) / durationMs);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    el.textContent = formatFn(targetValue * eased);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
 }
 
 /* ---------------- Freshness pill + run list ---------------- */
@@ -94,7 +131,7 @@ function renderIndexKpi(overallRows) {
   }
   const sorted = [...overallRows].sort((a, b) => a.index_date.localeCompare(b.index_date));
   const latest = sorted[sorted.length - 1];
-  valueEl.textContent = fmtIndex(latest.index_value);
+  animateCountUp(valueEl, Number(latest.index_value), fmtIndex);
 
   if (sorted.length < 2) {
     deltaEl.textContent = "day 1 — baseline";
@@ -110,7 +147,10 @@ function renderIndexKpi(overallRows) {
 
 function renderVolumeKpis(summaryRows) {
   const totalObservations = summaryRows.reduce((sum, r) => sum + r.sample_count, 0);
-  document.getElementById("kpi-observations").textContent = fmtInt(totalObservations);
+  // fmtInt doesn't round on its own (fine for its other, already-integer
+  // call sites) -- wrapped here so the mid-count frames show whole
+  // numbers instead of toLocaleString's raw fractional digits.
+  animateCountUp(document.getElementById("kpi-observations"), totalObservations, (n) => fmtInt(Math.round(n)));
 
   const distinctDates = new Set(summaryRows.map((r) => r.fare_date));
   const days = distinctDates.size;
@@ -142,7 +182,14 @@ function renderRouteTable(summaryRows) {
     byRoute.get(row.route_id)[row.lead_window] = row.avg_total_fare;
   }
 
-  const routeIds = [...byRoute.keys()].sort();
+  // Group a route with its reverse (BOM-DEL next to DEL-BOM) by sorting on
+  // the unordered city pair first, direction second — a plain alphabetical
+  // sort would scatter DEL-BOM and BOM-DEL to opposite ends of the table.
+  const pairKey = (routeId) => routeId.split("-").sort().join("-");
+  const routeIds = [...byRoute.keys()].sort((a, b) => {
+    const byPair = pairKey(a).localeCompare(pairKey(b));
+    return byPair !== 0 ? byPair : a.localeCompare(b);
+  });
   tbody.innerHTML = routeIds
     .map((routeId) => {
       const cells = AP_WINDOWS.map((w) => {
@@ -168,16 +215,39 @@ function seriesFor(windowLabel) {
   };
 }
 
+/* Tukey's-fences outlier test (Q1 - 1.5*IQR, Q3 + 1.5*IQR) — the standard
+ * "far from the typical spread" rule, not a fixed threshold, so it adapts
+ * to whichever window/toggle state is on screen instead of a magic number
+ * tuned to one series. Needs at least 5 points to make a quartile
+ * meaningful; below that, nothing is flagged (a 2-point real-only series
+ * has no "typical spread" to be far from). */
+function outlierFences(values) {
+  if (values.length < 5) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const quantile = (p) => {
+    const idx = (sorted.length - 1) * p;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+  };
+  const q1 = quantile(0.25);
+  const q3 = quantile(0.75);
+  const iqr = q3 - q1;
+  return { lower: q1 - 1.5 * iqr, upper: q3 + 1.5 * iqr };
+}
+
 function drawChart(windowLabel) {
   const { labels, values } = seriesFor(windowLabel);
   const canvas = document.getElementById("index-chart");
   const empty = document.getElementById("chart-empty");
   const note = document.getElementById("chart-baseline-note");
+  const outlierNote = document.getElementById("chart-outlier-note");
 
   if (!labels.length) {
     canvas.style.display = "none";
     empty.hidden = false;
     note.hidden = true;
+    outlierNote.hidden = true;
     return;
   }
   canvas.style.display = "block";
@@ -187,20 +257,47 @@ function drawChart(windowLabel) {
   const styles = getComputedStyle(document.documentElement);
   const accent = styles.getPropertyValue("--accent").trim();
   const accentSoft = styles.getPropertyValue("--accent-soft").trim();
+  const outlierColor = styles.getPropertyValue("--status-failed").trim();
   const gridColor = styles.getPropertyValue("--line").trim();
   const inkSoft = styles.getPropertyValue("--ink-soft").trim();
+
+  // Outliers (festival-day spikes, etc.) get pinned to a ceiling/floor
+  // computed from the REST of the series, rather than left to stretch the
+  // y-axis so every ordinary day's movement gets flattened into a few
+  // pixels. The true value is never lost — it's still in the tooltip —
+  // just not allowed to set the chart's scale.
+  const fences = outlierFences(values);
+  const isOutlierIndex = (i) => fences != null && (values[i] > fences.upper || values[i] < fences.lower);
+  const typicalValues = fences ? values.filter((v, i) => !isOutlierIndex(i)) : values;
+  const hasOutliers = fences != null && typicalValues.length < values.length && typicalValues.length > 0;
+
+  let plotValues = values;
+  let yMin, yMax;
+  if (hasOutliers) {
+    const typicalMax = Math.max(...typicalValues);
+    const typicalMin = Math.min(...typicalValues);
+    const pad = (typicalMax - typicalMin) * 0.15 || typicalMax * 0.05 || 1;
+    yMax = typicalMax + pad;
+    yMin = Math.max(0, typicalMin - pad);
+    plotValues = values.map((v, i) => (isOutlierIndex(i) ? (v > fences.upper ? yMax : yMin) : v));
+  }
+  outlierNote.hidden = !hasOutliers;
+
+  const basePointRadius = (i) => (isOutlierIndex(i) ? 8 : labels.length > 1 ? 3 : 6);
 
   const data = {
     labels,
     datasets: [
       {
         label: windowLabel === "OVERALL" ? "Overall index" : windowLabel,
-        data: values,
+        data: plotValues,
         borderColor: accent,
         backgroundColor: accentSoft,
-        pointBackgroundColor: accent,
-        pointRadius: labels.length > 1 ? 3 : 6,
-        pointHoverRadius: 6,
+        pointStyle: (ctx) => (isOutlierIndex(ctx.dataIndex) ? "triangle" : "circle"),
+        pointBackgroundColor: (ctx) => (isOutlierIndex(ctx.dataIndex) ? outlierColor : accent),
+        pointBorderColor: (ctx) => (isOutlierIndex(ctx.dataIndex) ? outlierColor : undefined),
+        pointRadius: (ctx) => basePointRadius(ctx.dataIndex),
+        pointHoverRadius: (ctx) => basePointRadius(ctx.dataIndex) + 2,
         borderWidth: 2.5,
         fill: true,
         tension: 0.25,
@@ -211,15 +308,27 @@ function drawChart(windowLabel) {
   const options = {
     responsive: true,
     maintainAspectRatio: false,
+    // Explicit (rather than Chart.js's own default) so it's pinned to the
+    // same KPI_REVEAL_MS the KPI-strip reveal transition uses — see that
+    // constant's own comment.
+    animation: { duration: KPI_REVEAL_MS, easing: "easeOutQuart" },
     plugins: {
       legend: { display: false },
       tooltip: {
-        callbacks: { label: (ctx) => `Index: ${ctx.parsed.y.toFixed(2)}` },
+        callbacks: {
+          label: (ctx) => {
+            const real = values[ctx.dataIndex];
+            const flag = isOutlierIndex(ctx.dataIndex) ? "  ⚠ outlier, off-scale" : "";
+            return `Index: ${real.toFixed(2)}${flag}`;
+          },
+        },
       },
     },
     scales: {
       x: { grid: { color: gridColor }, ticks: { color: inkSoft, font: { family: "'IBM Plex Mono', monospace", size: 11 } } },
       y: {
+        min: hasOutliers ? yMin : undefined,
+        max: hasOutliers ? yMax : undefined,
         grid: { color: gridColor },
         ticks: { color: inkSoft, font: { family: "'IBM Plex Mono', monospace", size: 11 } },
       },
@@ -250,6 +359,7 @@ function wireWindowToggle() {
   });
 }
 
+
 /* ---------------- Init + auto-refresh ---------------- */
 
 // The daily job can finish loading new rows while a dashboard tab is
@@ -274,6 +384,8 @@ async function loadData() {
   renderFreshness(runs);
   renderRunList(runs);
 
+  renderIndexKpi(indexRows.filter((r) => r.lead_window === "OVERALL"));
+
   indexRowsByWindow = { OVERALL: [] };
   for (const w of AP_WINDOWS) indexRowsByWindow[w] = [];
   for (const row of indexRows) {
@@ -281,14 +393,25 @@ async function loadData() {
     if (!indexRowsByWindow[key]) indexRowsByWindow[key] = [];
     indexRowsByWindow[key].push(row);
   }
-  renderIndexKpi(indexRowsByWindow.OVERALL);
   drawChart(activeWindowLabel());
+  revealKpiStrip(); // same tick as drawChart() -- see KPI_REVEAL_MS
 
   renderVolumeKpis(summaryRows);
   renderRoutesKpi(routes);
   renderRouteTable(summaryRows);
 
   latestKnownRunSignature = runs[0] ? `${runs[0].id}:${runs[0].status}:${runs[0].finished_at}` : null;
+}
+
+// Fires once per page load, not on every 30s poll refresh -- the KPI
+// cards sliding out from behind the chart panel is a load moment, not
+// something that should replay every time the background poll happens to
+// land new data.
+let hasRevealedKpis = false;
+function revealKpiStrip() {
+  if (hasRevealedKpis) return;
+  hasRevealedKpis = true;
+  document.getElementById("kpi-strip")?.classList.add("is-revealed");
 }
 
 async function pollForUpdates() {
@@ -313,4 +436,9 @@ async function init() {
 init().catch((err) => {
   console.error("APIx dashboard failed to load:", err);
   document.getElementById("freshness-label").textContent = "failed to load data — is the API reachable?";
+  // loadData() threw before ever reaching revealKpiStrip() -- without
+  // this the KPI cards would stay permanently at opacity:0 (their
+  // pre-reveal CSS default), invisible forever rather than just showing
+  // their "—" placeholder state.
+  revealKpiStrip();
 });
