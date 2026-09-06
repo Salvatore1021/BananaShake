@@ -403,12 +403,3 @@ a { color: var(--accent-ink); }
 .run-detail { font-size: 12px; color: var(--ink-faint); font-family: var(--font-mono); }
 
 /* ---------- Footer ---------- */
-.site-footer {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 0 28px 40px;
-  color: var(--ink-faint);
-  font-size: 12.5px;
-}
-.site-footer a { color: var(--accent-ink); text-decoration: none; }
-.site-footer a:hover { text-decoration: underline; }
