@@ -70,13 +70,40 @@
         <button type="button" class="toggle-btn" data-window="T+45" role="tab" aria-selected="false">T+45</button>
       </div>
     </div>
+    <div class="chart-legend" id="chart-legend"></div>
     <div class="chart-wrap">
       <canvas id="index-chart" height="110"></canvas>
       <div id="chart-empty" class="chart-empty" hidden>No index data yet for this window.</div>
     </div>
     <p id="chart-baseline-note" class="panel-note" hidden>Only one day of data so far — every series reads exactly 100 today by construction. This line will start showing real movement from day two onward.</p>
-    <p id="chart-outlier-note" class="panel-note" hidden>▲ Triangle = statistical outlier (festival/weekend spike, etc.) — pinned to the chart's edge so it doesn't stretch the y-axis for every other day; hover it for the real value.</p>
   </section>
+
+  <div class="grid-three">
+    <section class="panel" aria-label="Advance-purchase fare premium by route">
+      <div class="panel-head">
+        <h2>Advance-purchase premium</h2>
+        <span class="panel-head-note">most recent day, priciest window minus cheapest, by route</span>
+      </div>
+      <div class="chart-wrap chart-wrap--bar">
+        <canvas id="premium-bar-chart"></canvas>
+        <div id="premium-bar-empty" class="chart-empty" hidden>No fare data yet.</div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Scrape run outcomes">
+      <div class="panel-head">
+        <h2>Run outcomes</h2>
+        <span class="panel-head-note">last 10 runs, by result</span>
+      </div>
+      <div class="pie-panel-body">
+        <div class="pie-wrap">
+          <canvas id="run-pie-chart"></canvas>
+          <div id="run-pie-empty" class="chart-empty" hidden>No runs yet.</div>
+        </div>
+        <ul id="run-pie-legend" class="pie-legend"></ul>
+      </div>
+    </section>
+  </div>
 
   <div class="grid-two">
     <!-- Route table -->

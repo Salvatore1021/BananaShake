@@ -191,9 +191,9 @@ class ScrapeRun(Base):
 
 
 class FareIndexDaily(Base):
-    """One row per (index_date, lead_window) — the daily Airfare Price
-    Index value computed by app/index/psd_index.py, persisted here so the
-    dashboard/API reads a precomputed series instead of re-running the
+    """One row per (index_date, lead_window, method) — the daily Airfare
+    Price Index value computed by app/index/psd_index.py, persisted here so
+    the dashboard/API reads a precomputed series instead of re-running the
     weighted-index calculation on every request.
 
     lead_window holds either a real AP-window label ("T+7") or the sentinel
@@ -203,13 +203,24 @@ class FareIndexDaily(Base):
     constraint (and therefore ON CONFLICT) never treats two NULLs as equal,
     so a nullable lead_window would let every recompute silently INSERT a
     fresh "overall" row instead of updating the existing one, defeating
-    the whole point of upserting on (index_date, lead_window) — caught by
-    tests/test_psd_index.py's idempotency test before it ever shipped.
+    the whole point of upserting on (index_date, lead_window, method) —
+    caught by tests/test_psd_index.py's idempotency test before it ever
+    shipped.
+
+    method names which elementary-aggregation formula produced this row
+    (see app.index.psd_index's module docstring for the two methods and
+    why both are kept side by side rather than one replacing the other in
+    place) — also a real string, not a nullable/boolean flag, for the same
+    ON-CONFLICT-needs-a-real-value reason as lead_window above. Recomputing
+    under a second method inserts a second row per (date, lead_window)
+    rather than overwriting the first, so switching
+    app.index.psd_index.ACTIVE_INDEX_METHOD back to an older method is a
+    one-line, zero-data-loss revert: that method's rows were never touched.
     """
 
     __tablename__ = "fare_index_daily"
     __table_args__ = (
-        UniqueConstraint("index_date", "lead_window", name="uq_fare_index_daily_date_window"),
+        UniqueConstraint("index_date", "lead_window", "method", name="uq_fare_index_daily_date_window_method"),
         Index("ix_fare_index_daily_index_date", "index_date"),
     )
 
@@ -217,6 +228,7 @@ class FareIndexDaily(Base):
 
     index_date: Mapped[datetime.date] = mapped_column(nullable=False)
     lead_window: Mapped[str] = mapped_column(nullable=False)  # AP window label, or OVERALL_LABEL
+    method: Mapped[str] = mapped_column(nullable=False, default="carli_arithmetic_v1")
     index_value: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     base_date: Mapped[datetime.date] = mapped_column(nullable=False)
     route_count: Mapped[int] = mapped_column(nullable=False)  # routes actually contributing this row
@@ -226,5 +238,5 @@ class FareIndexDaily(Base):
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
         return (
             f"FareIndexDaily(index_date={self.index_date!r}, lead_window={self.lead_window!r}, "
-            f"index_value={self.index_value!r})"
+            f"method={self.method!r}, index_value={self.index_value!r})"
         )

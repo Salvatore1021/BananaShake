@@ -37,6 +37,24 @@
   --status-running: #3C6E9E;
   --status-running-soft: #DEE9F3;
 
+  /* Index-chart series (Daily index panel): three formulas plotted at
+     once, so -- unlike --accent above, which only ever had to read
+     against a plain white/gray chart chrome as a single line -- these
+     three need to stay distinguishable from EACH OTHER under simulated
+     color-vision deficiency, not just look fine individually. Picked and
+     verified with the dataviz skill's validate_palette.js (all pairwise
+     checks pass on this app's actual chart surface, --surface-raised
+     #FFFFFF); jevons stays in the same teal/aqua family as --accent for
+     continuity with this line's pre-existing look, tornqvist and geks
+     are placed as far from it and each other as the validated
+     categorical order allows. --series-jevons reads slightly under the
+     3:1 relief threshold on white (2.82:1) -- mitigated by the always-
+     visible text legend in the chart header (app.js's renderChartLegend)
+     rather than color alone. */
+  --series-jevons: #1BAF7A;
+  --series-tornqvist: #2A78D6;
+  --series-geks: #4A3AA7;
+
   --font-display: 'Fraunces', ui-serif, Georgia, serif;
   --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
@@ -290,13 +308,43 @@ a { color: var(--accent-ink); }
 .toggle-btn.is-active { background: var(--accent); color: var(--surface-raised); }
 .toggle-btn:focus-visible, .run-list a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Index-chart legend: text stays in ink tokens (never the series color --
+   see the "text wears text tokens" rule) so identity is carried by the
+   swatch, not by colored text riding on top of a light background. */
+.chart-legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 2px 2px 12px; }
+.chart-legend-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-soft); }
+.chart-legend-swatch { width: 12px; height: 3px; border-radius: 2px; flex: none; }
+.chart-legend-swatch--dashed {
+  background: none;
+  height: 0;
+  border-top: 2px dashed var(--ink-faint);
+  align-self: center;
+}
+
 .chart-wrap { position: relative; height: 300px; }
+.chart-wrap--bar { height: 260px; }
 .chart-empty {
   position: absolute; inset: 0;
   display: grid; place-items: center;
   color: var(--ink-faint);
   font-size: 13px;
 }
+
+/* ---------- Pie / donut panels ---------- */
+.grid-three {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+@media (max-width: 900px) { .grid-three { grid-template-columns: 1fr; } }
+
+.pie-panel-body { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.pie-wrap { position: relative; width: 150px; height: 150px; flex: none; }
+.pie-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 160px; }
+.pie-legend li { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.pie-legend-swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.pie-legend-label { color: var(--ink); flex: 1; }
+.pie-legend-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-faint); font-size: 12.5px; }
 
 /* ---------- Two-column grid ---------- */
 .grid-two {

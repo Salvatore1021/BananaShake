@@ -12,6 +12,7 @@ T+1/T+7/T+15/T+30/T+45 basket.
 from __future__ import annotations
 
 import datetime
+import math
 import unittest
 from decimal import Decimal
 
@@ -21,7 +22,13 @@ from sqlalchemy.orm import Session
 from app.db.models import Carrier, FareIndexDaily, FareObservation, Route
 from app.db.session import engine
 from app.index.psd_index import (
+    ALL_METHODS,
+    GEKS_METHOD,
+    LEGACY_METHOD,
     OVERALL_LABEL,
+    RECOMMENDED_METHOD,
+    TORNQVIST_METHOD,
+    compute_geks_window_index_series,
     compute_overall_index_series,
     compute_window_index_series,
     recompute_all,
@@ -176,10 +183,13 @@ class PersistAndRecomputeTests(PsdIndexTestCase):
         count = self.session.execute(
             select(func.count()).select_from(FareIndexDaily).where(FareIndexDaily.index_date == base_day.date())
         ).scalar()
-        # one per-window row + one blended overall row, for the single date
-        self.assertEqual(count, 2)
+        # recompute_all's default `methods` is ALL_METHODS (see its own
+        # docstring on why: every run keeps every method's series fresh so
+        # none of them can go stale) -- one per-window row + one blended
+        # overall row, per method, for the single date.
+        self.assertEqual(count, 2 * len(ALL_METHODS))
 
-    def test_recompute_overwrites_changed_value(self):
+    def test_recompute_overwrites_changed_value_per_method(self):
         self._seed_route("DEL-BOM", "DEL", "BOM")
         base_day = datetime.datetime(2026, 8, 1, 10, 0)
         later_day = datetime.datetime(2026, 8, 2, 10, 0)
@@ -193,11 +203,167 @@ class PersistAndRecomputeTests(PsdIndexTestCase):
         self.session.flush()
         recompute_all(self.session, {"DEL-BOM": 1.0}, ap_windows=[TEST_WINDOW], commit=False)
 
-        row = self.session.scalars(
-            select(FareIndexDaily).filter_by(index_date=later_day.date(), lead_window=TEST_WINDOW)
+        legacy_row = self.session.scalars(
+            select(FareIndexDaily).filter_by(index_date=later_day.date(), lead_window=TEST_WINDOW, method=LEGACY_METHOD)
         ).one()
-        # avg(6000, 5500) = 5750 -> 5750 / 5000 * 100 = 115
-        self.assertEqual(row.index_value, Decimal("115.0000"))
+        # arithmetic mean(6000, 5500) = 5750 -> 5750 / 5000 * 100 = 115
+        self.assertEqual(legacy_row.index_value, Decimal("115.0000"))
+
+        recommended_row = self.session.scalars(
+            select(FareIndexDaily).filter_by(index_date=later_day.date(), lead_window=TEST_WINDOW, method=RECOMMENDED_METHOD)
+        ).one()
+        # geometric mean(6000, 5500) = sqrt(6000*5500) ~= 5744.5628 -> ~114.8913;
+        # below the arithmetic-mean result, which is exactly the Carli
+        # upward-bias direction the module docstring documents.
+        self.assertLess(recommended_row.index_value, legacy_row.index_value)
+        self.assertAlmostEqual(float(recommended_row.index_value), 114.8913, places=3)
+
+
+class TornqvistIndexTests(PsdIndexTestCase):
+    """tornqvist_bilateral_v1 combines routes with a weighted GEOMETRIC
+    mean of price relatives instead of jevons_geometric_v2's weighted
+    ARITHMETIC mean — same per-route-fixed-base shape as
+    ComputeWindowIndexSeriesTests above, so the only thing under test here
+    is that the combination step itself is correct."""
+
+    def test_base_date_gets_index_value_100(self):
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        base_day = datetime.datetime(2026, 8, 1, 10, 0)
+        self.session.add(_make_observation("DEL-BOM", 5000, base_day))
+        self.session.flush()
+
+        rows = compute_window_index_series(self.session, TEST_WINDOW, {"DEL-BOM": 1.0}, method=TORNQVIST_METHOD)
+        self.assertEqual(rows[0]["index_value"], Decimal("100.0000"))
+
+    def test_weighted_geometric_blend_diverges_from_arithmetic(self):
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        self._seed_route("DEL-BLR", "DEL", "BLR")
+        base_day = datetime.datetime(2026, 8, 1, 10, 0)
+        later_day = datetime.datetime(2026, 8, 2, 10, 0)
+        # DEL-BOM: 5000 -> 6000 (+20%); DEL-BLR: 4000 -> 4000 (+0%); equal weight
+        self.session.add(_make_observation("DEL-BOM", 5000, base_day))
+        self.session.add(_make_observation("DEL-BOM", 6000, later_day))
+        self.session.add(_make_observation("DEL-BLR", 4000, base_day))
+        self.session.add(_make_observation("DEL-BLR", 4000, later_day))
+        self.session.flush()
+
+        rows = compute_window_index_series(self.session, TEST_WINDOW, {"DEL-BOM": 1.0, "DEL-BLR": 1.0}, method=TORNQVIST_METHOD)
+        by_date = {r["index_date"]: r for r in rows}
+        # weighted geometric mean of relatives 1.20 and 1.00, equal weights
+        # = sqrt(1.20 * 1.00) = sqrt(1.20) ~= 1.0954451, vs. the equal-weight
+        # ARITHMETIC blend's 110.0000 (see the matching Jevons/Carli test) --
+        # AM > GM for any non-identical pair, so this must land strictly below.
+        expected = 100 * math.sqrt(1.20)
+        self.assertAlmostEqual(float(by_date[later_day.date()]["index_value"]), expected, places=3)
+        self.assertLess(by_date[later_day.date()]["index_value"], Decimal("110.0000"))
+
+
+class GeksIndexTests(PsdIndexTestCase):
+    """geks_multilateral_v1 -- see the module docstring's MULTI-ROUTE
+    COMBINATION METHODS section. Two properties are cheap to verify
+    exactly: (1) the single earliest date across the series is always
+    100 by construction, regardless of route coverage elsewhere, and
+    (2) with exactly one route in the basket, every bilateral bridge
+    trivially agrees (the route's own fare cancels out of every
+    comparison), so GEKS collapses to the same plain price relative the
+    fixed-base methods already compute -- a degenerate case that still
+    exercises the full multilateral averaging code path."""
+
+    def test_base_date_is_always_100_even_with_uneven_route_coverage(self):
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        self._seed_route("DEL-BLR", "DEL", "BLR")
+        day1 = datetime.datetime(2026, 8, 1, 10, 0)
+        day2 = datetime.datetime(2026, 8, 2, 10, 0)
+        day3 = datetime.datetime(2026, 8, 3, 10, 0)
+        self.session.add(_make_observation("DEL-BOM", 5000, day1))
+        self.session.add(_make_observation("DEL-BLR", 4000, day1))
+        self.session.add(_make_observation("DEL-BOM", 5500, day2))  # DEL-BLR missing this day
+        self.session.add(_make_observation("DEL-BOM", 6000, day3))
+        self.session.add(_make_observation("DEL-BLR", 4000, day3))
+        self.session.flush()
+
+        rows = compute_geks_window_index_series(self.session, TEST_WINDOW, {"DEL-BOM": 1.0, "DEL-BLR": 1.0})
+        by_date = {r["index_date"]: r for r in rows}
+        self.assertEqual(by_date[day1.date()]["index_value"], Decimal("100.0000"))
+        self.assertEqual(by_date[day1.date()]["route_count"], 2)
+        self.assertEqual(by_date[day2.date()]["route_count"], 1)
+        # every date got a value despite the uneven coverage -- the whole
+        # point of bridging through every date rather than only comparing
+        # each date directly to day1.
+        self.assertEqual(set(by_date), {day1.date(), day2.date(), day3.date()})
+
+    def test_single_route_collapses_to_the_plain_price_relative(self):
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        day1 = datetime.datetime(2026, 8, 1, 10, 0)
+        day2 = datetime.datetime(2026, 8, 2, 10, 0)
+        day3 = datetime.datetime(2026, 8, 3, 10, 0)
+        self.session.add(_make_observation("DEL-BOM", 5000, day1))
+        self.session.add(_make_observation("DEL-BOM", 6000, day2))
+        self.session.add(_make_observation("DEL-BOM", 7500, day3))
+        self.session.flush()
+
+        rows = compute_geks_window_index_series(self.session, TEST_WINDOW, {"DEL-BOM": 1.0})
+        by_date = {r["index_date"]: r for r in rows}
+        self.assertEqual(by_date[day1.date()]["index_value"], Decimal("100.0000"))
+        self.assertEqual(by_date[day2.date()]["index_value"], Decimal("120.0000"))
+        self.assertEqual(by_date[day3.date()]["index_value"], Decimal("150.0000"))
+
+    def test_balanced_full_coverage_panel_matches_tornqvist_exactly(self):
+        """With every route reporting on every date (a balanced panel),
+        the same fixed weights apply to every bilateral comparison, so
+        the bilateral matrix is already transitive and GEKS's multilateral
+        averaging must reduce to exactly the same series
+        tornqvist_bilateral_v1 already computes directly against the
+        fixed base date -- this is the case GEKS is NOT needed for, and
+        it should show that by agreeing with it exactly rather than by
+        coincidence."""
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        self._seed_route("DEL-BLR", "DEL", "BLR")
+        day1 = datetime.datetime(2026, 8, 1, 10, 0)
+        day2 = datetime.datetime(2026, 8, 2, 10, 0)
+        day3 = datetime.datetime(2026, 8, 3, 10, 0)
+        for day, (bom_fare, blr_fare) in {
+            day1: (5000, 4000), day2: (6000, 4200), day3: (4800, 4400),
+        }.items():
+            self.session.add(_make_observation("DEL-BOM", bom_fare, day))
+            self.session.add(_make_observation("DEL-BLR", blr_fare, day))
+        self.session.flush()
+
+        weights = {"DEL-BOM": 1.0, "DEL-BLR": 1.0}
+        geks_rows = {r["index_date"]: r["index_value"] for r in compute_geks_window_index_series(self.session, TEST_WINDOW, weights)}
+        tornqvist_rows = {
+            r["index_date"]: r["index_value"]
+            for r in compute_window_index_series(self.session, TEST_WINDOW, weights, method=TORNQVIST_METHOD)
+        }
+        self.assertEqual(geks_rows, tornqvist_rows)
+
+
+class MethodRevertibilityTests(PsdIndexTestCase):
+    """Confirms the actual guarantee this whole method-column design exists
+    for: recomputing one method never touches another method's already-
+    persisted rows, so flipping ACTIVE_INDEX_METHOD back is always safe."""
+
+    def test_recomputing_one_method_does_not_touch_the_other(self):
+        self._seed_route("DEL-BOM", "DEL", "BOM")
+        base_day = datetime.datetime(2026, 8, 1, 10, 0)
+        self.session.add(_make_observation("DEL-BOM", 5000, base_day))
+        self.session.flush()
+
+        recompute_all(self.session, {"DEL-BOM": 1.0}, ap_windows=[TEST_WINDOW], commit=False, methods=ALL_METHODS)
+        before = {
+            m: self.session.scalars(
+                select(FareIndexDaily).filter_by(index_date=base_day.date(), lead_window=TEST_WINDOW, method=m)
+            ).one().index_value
+            for m in ALL_METHODS
+        }
+
+        # A later recompute that only asks for the legacy method must leave
+        # the recommended method's row exactly as it was.
+        recompute_all(self.session, {"DEL-BOM": 1.0}, ap_windows=[TEST_WINDOW], commit=False, methods=(LEGACY_METHOD,))
+        after_recommended = self.session.scalars(
+            select(FareIndexDaily).filter_by(index_date=base_day.date(), lead_window=TEST_WINDOW, method=RECOMMENDED_METHOD)
+        ).one().index_value
+        self.assertEqual(after_recommended, before[RECOMMENDED_METHOD])
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.api.schemas import FareIndexDailyOut, ScrapeRunOut
 from app.db.models import FareIndexDaily, ScrapeRun
-from app.index.psd_index import OVERALL_LABEL
+from app.index.psd_index import ACTIVE_INDEX_METHOD, OVERALL_LABEL
 
 router = APIRouter()
 
@@ -32,11 +32,22 @@ def daily_index(
     overall_only: bool = Query(False, description="return only the blended overall row per date"),
     date_from: datetime.date | None = Query(None, description="index_date lower bound, inclusive"),
     date_to: datetime.date | None = Query(None, description="index_date upper bound, inclusive"),
+    method: str | None = Query(
+        None,
+        description=(
+            "Which index-construction formula to read (see app.index.psd_index's module "
+            f"docstring for all of ALL_METHODS -- carli_arithmetic_v1, jevons_geometric_v2, "
+            "tornqvist_bilateral_v1, geks_multilateral_v1). Omit for the currently-active method "
+            f"('{ACTIVE_INDEX_METHOD}'); pass another method's name explicitly to read it instead -- "
+            "every method's rows are kept side by side, never overwritten, so this always has "
+            "something real to return (the dashboard's multi-line chart calls this once per method)."
+        ),
+    ),
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
 ) -> list[FareIndexDaily]:
     """The daily Airfare Price Index series, oldest first — what a
     dashboard's index line chart plots directly."""
-    stmt = select(FareIndexDaily)
+    stmt = select(FareIndexDaily).where(FareIndexDaily.method == (method or ACTIVE_INDEX_METHOD))
     if overall_only:
         stmt = stmt.where(FareIndexDaily.lead_window == OVERALL_LABEL)
     elif lead_window is not None:

@@ -68,12 +68,18 @@ class FareIndexDailyOut(BaseModel):
     """One day's Airfare Price Index value, either for a single AP window
     or the blended overall figure (lead_window == app.index.psd_index.
     OVERALL_LABEL for that row) — mirrors app.db.models.FareIndexDaily,
-    the table app/index/psd_index.py persists into."""
+    the table app/index/psd_index.py persists into.
+
+    method names which elementary-aggregation formula produced this row
+    (see app.index.psd_index's module docstring) — surfaced here rather
+    than assumed so a client can tell which formula it's looking at, or
+    request an older one explicitly via GET /index/daily?method=..."""
 
     model_config = ConfigDict(from_attributes=True)
 
     index_date: datetime.date
     lead_window: str
+    method: str
     index_value: Decimal
     base_date: datetime.date
     route_count: int
