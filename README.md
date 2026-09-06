@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">FairShow — Airfare Price Index</h1>
+  <h1 align="center">FarePlay — Airfare Price Index</h1>
   <p align="center">
     <em>An automated, high-frequency airfare price index — built to augment India's Consumer Price Index (CPI) with real fare data instead of manual, infrequent sampling.</em>
   </p>
@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/dashboard.jpg" alt="FairShow dashboard — daily index chart with Jevons, Törnqvist and GEKS lines, KPI strip" width="820">
+  <img src="docs/dashboard.jpg" alt="FarePlay dashboard — daily index chart with Jevons, Törnqvist and GEKS lines, KPI strip" width="820">
 </p>
 
 ---
@@ -26,7 +26,7 @@
 
 Over 90% of India's domestic air tickets are sold online, but the CPI's airfare component is still built from manual, infrequent price collection — and airfares themselves swing 200–400% in a single day depending on how far ahead you book. That mismatch means policymakers get a stale, low-frequency signal for one of the most volatile line items in the basket.
 
-FairShow closes that gap: it scrapes real fares on a fixed daily schedule, across a representative route basket and five advance-purchase windows, normalizes everything into an append-only time series, and turns it into a proper statistical price index — not a spreadsheet average.
+FarePlay closes that gap: it scrapes real fares on a fixed daily schedule, across a representative route basket and five advance-purchase windows, normalizes everything into an append-only time series, and turns it into a proper statistical price index — not a spreadsheet average.
 
 ## Architecture
 
@@ -39,7 +39,7 @@ flowchart LR
     E --> F["Index construction\napp/index/psd_index.py"]
     F --> E
     E --> G["FastAPI\nread-only REST layer"]
-    G --> H["FairShow dashboard\nstatic HTML/JS, same origin"]
+    G --> H["FarePlay dashboard\nstatic HTML/JS, same origin"]
 
     style E fill:#dee9f3,stroke:#3c6e9e,color:#1a1a1a
     style F fill:#dfeee6,stroke:#2e8b57,color:#1a1a1a
@@ -68,7 +68,7 @@ The dashboard plots Jevons, Törnqvist and GEKS as three lines against a fixed 1
 
 ## Dashboard
 
-The FairShow dashboard (served at `/`) is a single static page, no build step:
+The FarePlay dashboard (served at `/`) is a single static page, no build step:
 
 - **KPI strip** — today's overall index, quotes collected, routes tracked, progress toward the 30-day back-test window.
 - **Daily index** — the three-method chart above, toggled by AP window.
