@@ -224,7 +224,7 @@ function renderRouteTable(byRoute) {
 // construction (see app/ingestion/scheduler.py), so that chart rarely
 // showed anything but five near-equal slices.
 let premiumBarChart = null;
-const PREMIUM_BAR_LIMIT = 8;
+const PREMIUM_BAR_LIMIT = 12; // full-width panel now (Run outcomes' half of the row is gone) -- room for more than the original 8
 
 function renderAdvancePurchasePremium(byRoute) {
   const canvas = document.getElementById("premium-bar-chart");
@@ -290,80 +290,6 @@ function renderAdvancePurchasePremium(byRoute) {
   } else {
     premiumBarChart = new Chart(canvas.getContext("2d"), { type: "bar", data, options });
   }
-}
-
-/* ---------------- Pie / donut charts ---------------- */
-
-let runPieChart = null;
-
-function renderPieLegend(listEl, entries) {
-  listEl.innerHTML = entries
-    .map(
-      (e) => `
-      <li>
-        <span class="pie-legend-swatch" style="background:${e.color}"></span>
-        <span class="pie-legend-label">${e.label}</span>
-        <span class="pie-legend-value">${e.value}</span>
-      </li>`
-    )
-    .join("");
-}
-
-function drawDonut(canvas, existingChart, labels, data, colors) {
-  const cfg = {
-    type: "doughnut",
-    data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: "#F5F5F4", borderWidth: 2, hoverOffset: 4 }] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: "62%",
-      animation: { duration: KPI_REVEAL_MS, easing: "easeOutQuart" },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${ctx.formattedValue}` } } },
-    },
-  };
-  if (existingChart) {
-    existingChart.data = cfg.data;
-    existingChart.update();
-    return existingChart;
-  }
-  return new Chart(canvas.getContext("2d"), cfg);
-}
-
-// Run outcome is a STATUS job (good/warning/critical state), so this pie
-// reuses the app's existing fixed status palette (same hexes as the
-// freshness pill / run list) rather than a categorical or ordinal ramp --
-// see dataviz skill's color-formula.md, "status is fixed."
-function renderRunPie(runs) {
-  const canvas = document.getElementById("run-pie-chart");
-  const empty = document.getElementById("run-pie-empty");
-  const legendEl = document.getElementById("run-pie-legend");
-
-  const recent = runs.slice(0, 10);
-  if (!recent.length) {
-    canvas.style.display = "none";
-    empty.hidden = false;
-    legendEl.innerHTML = "";
-    return;
-  }
-  canvas.style.display = "block";
-  empty.hidden = true;
-
-  const styles = getComputedStyle(document.documentElement);
-  const statusOrder = ["success", "partial", "failed", "running"];
-  const statusVar = { success: "--status-success", partial: "--status-partial", failed: "--status-failed", running: "--status-running" };
-  const counts = new Map(statusOrder.map((s) => [s, 0]));
-  for (const run of recent) {
-    counts.set(run.status, (counts.get(run.status) || 0) + 1);
-  }
-
-  const present = statusOrder.filter((s) => counts.get(s) > 0);
-  const colors = present.map((s) => styles.getPropertyValue(statusVar[s]).trim());
-  const data = present.map((s) => counts.get(s));
-  runPieChart = drawDonut(canvas, runPieChart, present, data, colors);
-  renderPieLegend(
-    legendEl,
-    present.map((s, i) => ({ color: colors[i], label: s, value: `${counts.get(s)}/${recent.length}` }))
-  );
 }
 
 /* ---------------- Index chart ---------------- */
@@ -607,7 +533,6 @@ async function loadData() {
   const { byRoute } = latestDayByRoute(summaryRows);
   renderRouteTable(byRoute);
   renderAdvancePurchasePremium(byRoute);
-  renderRunPie(runs);
 
   latestKnownRunSignature = runs[0] ? `${runs[0].id}:${runs[0].status}:${runs[0].finished_at}` : null;
 }

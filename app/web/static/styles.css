@@ -322,29 +322,12 @@ a { color: var(--accent-ink); }
 }
 
 .chart-wrap { position: relative; height: 300px; }
-.chart-wrap--bar { height: 260px; }
 .chart-empty {
   position: absolute; inset: 0;
   display: grid; place-items: center;
   color: var(--ink-faint);
   font-size: 13px;
 }
-
-/* ---------- Pie / donut panels ---------- */
-.grid-three {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 22px;
-}
-@media (max-width: 900px) { .grid-three { grid-template-columns: 1fr; } }
-
-.pie-panel-body { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
-.pie-wrap { position: relative; width: 150px; height: 150px; flex: none; }
-.pie-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 160px; }
-.pie-legend li { display: flex; align-items: center; gap: 9px; font-size: 13px; }
-.pie-legend-swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
-.pie-legend-label { color: var(--ink); flex: 1; }
-.pie-legend-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-faint); font-size: 12.5px; }
 
 /* ---------- Two-column grid ---------- */
 .grid-two {
