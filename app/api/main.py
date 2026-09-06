@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -47,6 +47,23 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def no_cache_dashboard(request: Request, call_next):
+    """Starlette's StaticFiles sets Last-Modified/ETag but no explicit
+    Cache-Control, which leaves a browser free to serve its own disk/memory
+    cache on a plain reload without even revalidating -- editing app.js/
+    index.html/styles.css during development then looks like "nothing
+    changed" until someone remembers to hard-refresh. This project has no
+    build step or cache-busted filenames for its static assets (see this
+    module's own docstring), so the dashboard and everything under /static
+    are told never to cache instead -- a normal reload always re-fetches
+    the real file from disk. The JSON API responses are unaffected."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 app.include_router(fares.router, tags=["fares"])
 app.include_router(index.router, tags=["index"])
