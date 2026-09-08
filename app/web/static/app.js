@@ -4,7 +4,6 @@
  * uvicorn — no bundler, no config. */
 
 const BASKET_ROUTE_COUNT = 20; // app/ingestion/scheduler.py's ROUTE_PAIRS
-const BACKTEST_TARGET_DAYS = 30; // the project's 30-day DGCA back-test requirement
 const AP_WINDOWS = ["T+1", "T+7", "T+15", "T+30", "T+45"];
 
 // Drives drawChart()'s Chart.js animation.duration directly. The KPI
@@ -151,13 +150,6 @@ function renderVolumeKpis(summaryRows) {
   // call sites) -- wrapped here so the mid-count frames show whole
   // numbers instead of toLocaleString's raw fractional digits.
   animateCountUp(document.getElementById("kpi-observations"), totalObservations, (n) => fmtInt(Math.round(n)));
-
-  const distinctDates = new Set(summaryRows.map((r) => r.fare_date));
-  const days = distinctDates.size;
-  document.getElementById("kpi-days").textContent = `${days} / ${BACKTEST_TARGET_DAYS}`;
-  document.getElementById("progress-fill").style.width = `${Math.min((days / BACKTEST_TARGET_DAYS) * 100, 100)}%`;
-
-  return { totalObservations, days, distinctDates };
 }
 
 function renderRoutesKpi(routes) {
